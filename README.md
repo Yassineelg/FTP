@@ -35,6 +35,7 @@ The project is organized as follows:
 ├── LICENSE
 ├── README.md
 ├── Taskfile.yml
+├── compose.yml
 ├── config
 ├── docs
 ├── infra
