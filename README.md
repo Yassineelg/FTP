@@ -152,7 +152,7 @@ Example usage scenarios and code snippets will be provided as the project develo
 
 - Create a pull request (PR)
 
-- Ensure you use conventional commits
+- Ensure you use [conventional commits](https://github.com/Yassineelg/Conventional-Commits)
 
 ## 📝 License
 
