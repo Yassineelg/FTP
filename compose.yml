@@ -1,0 +1,6 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: infra/server/Dockerfile
+    container_name: ftp_server
