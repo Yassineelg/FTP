@@ -1,7 +1,7 @@
-#include <iostream>
+#include "../include/main.hpp"
 
 int main() {
-    std::cout << "Server application started." << std::endl;
-    // Server logic here
+    ServerFTP server;
+    server.run();
     return 0;
 }
