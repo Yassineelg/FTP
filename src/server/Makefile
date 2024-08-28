@@ -11,7 +11,7 @@ OBJS := $(SRCS:.cpp=.o)
 
 TARGET := $(BIN_DIR)/ftp_server
 
-CXXFLAGS := -I$(INCLUDE_DIR) -L$(LIB_DIR)
+CXXFLAGS := -I$(INCLUDE_DIR) -L$(LIB_DIR) -std=c++20
 
 all: $(TARGET) clean
 

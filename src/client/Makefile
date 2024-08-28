@@ -15,7 +15,7 @@ else
     TARGET := $(BIN_DIR)/ftp
 endif
 
-CXXFLAGS := -I$(INCLUDE_DIR) -L$(LIB_DIR)
+CXXFLAGS := -I$(INCLUDE_DIR) -L$(LIB_DIR) -std=c++20
 
 all: $(TARGET) clean
 
