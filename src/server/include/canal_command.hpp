@@ -14,9 +14,9 @@ enum class FTPMode {
     Passif
 };
 
-class ServerCommand {
+class CanalCommand {
 public:
-    ServerCommand(int port);
+    CanalCommand(int port);
     int acceptClient();
     int getServerSocket() const;
     bool handleClient(int clientSocket);
@@ -25,7 +25,7 @@ public:
 private:
     int serverSocket_;
     struct sockaddr_in serverAddr_;
-    using CommandHandler = void (ServerCommand::*)(int);
+    using CommandHandler = void (CanalCommand::*)(int);
     std::map<std::string, CommandHandler> commandHandlers_;
 
     void setupServer(int port);
@@ -37,4 +37,3 @@ private:
     void handleQuitCommand(int clientSocket);
     void handleListCommand(int clientSocket);
 };
-

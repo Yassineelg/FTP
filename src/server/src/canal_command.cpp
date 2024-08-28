@@ -1,24 +1,24 @@
-#include "../include/server_command.hpp"
+#include "../include/canal_command.hpp"
 #include <cerrno>
 #include <cstring>
 #include <arpa/inet.h>
 
-ServerCommand::ServerCommand(int port) {
+CanalCommand::CanalCommand(int port) {
     setupServer(port);
 
 //Login
-    commandHandlers_["USER"] = &ServerCommand::handleUserCommand;
-    commandHandlers_["PASS"] = &ServerCommand::handlePassCommand;
+    commandHandlers_["USER"] = &CanalCommand::handleUserCommand;
+    commandHandlers_["PASS"] = &CanalCommand::handlePassCommand;
 //Transfer parameters
-    commandHandlers_["STOR"] = &ServerCommand::handleStorCommand;
-    commandHandlers_["RETR"] = &ServerCommand::handleRetrCommand;
+    commandHandlers_["STOR"] = &CanalCommand::handleStorCommand;
+    commandHandlers_["RETR"] = &CanalCommand::handleRetrCommand;
 //File action commands
-    commandHandlers_["LIST"] = &ServerCommand::handleListCommand;
+    commandHandlers_["LIST"] = &CanalCommand::handleListCommand;
 //Logout
-    commandHandlers_["QUIT"] = &ServerCommand::handleQuitCommand;
+    commandHandlers_["QUIT"] = &CanalCommand::handleQuitCommand;
 }
 
-void ServerCommand::setupServer(int port) {
+void CanalCommand::setupServer(int port) {
     serverSocket_ = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket_ < 0) {
         std::cerr << "Erreur de création du socket: " << std::strerror(errno) << std::endl;
@@ -41,17 +41,17 @@ void ServerCommand::setupServer(int port) {
         exit(EXIT_FAILURE);
     }
 
-    std::cout << "Serveur FTP en écoute sur le port " << port << std::endl;
+    std::cout << "Serveur FTP, Port : " << port << std::endl;
 }
 
-void ServerCommand::sendToClient(int clientSocket, const std::string& message) {
+void CanalCommand::sendToClient(int clientSocket, const std::string& message) {
     ssize_t bytesSent = write(clientSocket, message.c_str(), message.size());
     if (bytesSent < 0) {
         std::cerr << "Erreur d'écriture sur le socket " << clientSocket << ": " << std::strerror(errno) << std::endl;
     }
 }
 
-bool ServerCommand::handleClient(int clientSocket) {
+bool CanalCommand::handleClient(int clientSocket) {
     char buffer[1024];
     ssize_t bytesRead = read(clientSocket, buffer, sizeof(buffer) - 1);
 
@@ -69,7 +69,7 @@ bool ServerCommand::handleClient(int clientSocket) {
     }
 }
 
-int ServerCommand::acceptClient() {
+int CanalCommand::acceptClient() {
     sockaddr_in clientAddr;
     socklen_t clientAddrLen = sizeof(clientAddr);
     int clientSocket = accept(serverSocket_, (struct sockaddr*)&clientAddr, &clientAddrLen);
@@ -83,11 +83,11 @@ int ServerCommand::acceptClient() {
     return clientSocket;
 }
 
-int ServerCommand::getServerSocket() const {
+int CanalCommand::getServerSocket() const {
     return serverSocket_;
 }
 
-void ServerCommand::processCommand(int clientSocket, const std::string& command , FTPMode isPassive) {
+void CanalCommand::processCommand(int clientSocket, const std::string& command , FTPMode isPassive) {
     std::string commandKey = command.substr(0, 4);
 
     auto it = commandHandlers_.find(commandKey);
@@ -100,26 +100,26 @@ void ServerCommand::processCommand(int clientSocket, const std::string& command 
     }
 }
 
-void ServerCommand::handleUserCommand(int clientSocket) {
+void CanalCommand::handleUserCommand(int clientSocket) {
     std::cout << "Socket: ["  << clientSocket << "], Command: USER" << std::endl;
 }
 
-void ServerCommand::handlePassCommand(int clientSocket) {
+void CanalCommand::handlePassCommand(int clientSocket) {
     std::cout << "Socket: ["  << clientSocket << "], Command: PASS " << std::endl;
 }
 
-void ServerCommand::handleStorCommand(int clientSocket) {
+void CanalCommand::handleStorCommand(int clientSocket) {
     std::cout << "Socket: ["  << clientSocket << "], Command: STOR " << std::endl;
 }
 
-void ServerCommand::handleRetrCommand(int clientSocket) {
+void CanalCommand::handleRetrCommand(int clientSocket) {
     std::cout << "Socket: ["  << clientSocket << "], Command: RETR " << std::endl;
 }
 
-void ServerCommand::handleQuitCommand(int clientSocket) {
+void CanalCommand::handleQuitCommand(int clientSocket) {
     std::cout << "Socket: ["  << clientSocket << "], Command: QUIT " << std::endl;
 }
 
-void ServerCommand::handleListCommand(int clientSocket) {
+void CanalCommand::handleListCommand(int clientSocket) {
     std::cout << "Socket: ["  << clientSocket << "], Command: LIST " << std::endl;
 }
