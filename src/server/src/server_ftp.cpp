@@ -1,7 +1,7 @@
 #include "../include/server_ftp.hpp"
 #include "../include/poller.hpp"
 
-ServerFTP::ServerFTP(int portCommand) : commandServer_(portCommand), poller_() {}
+ServerFTP::ServerFTP(int portCommand) : queueClient_(10), commandServer_(portCommand, &queueClient_), poller_() {}
 
 ServerFTP::~ServerFTP() {
     close(commandServer_.getServerSocket());
@@ -41,7 +41,7 @@ void ServerFTP::handleClientData(int fd) {
         for (auto& client : clients) {
             if (client.socket_fd == fd) {
                 found = true;
-                if (!commandServer_.handleClient(fd)) {
+                if (!commandServer_.handleClient(&client)) {
                     handleClientDisconnection(fd);
                 }
                 break;
