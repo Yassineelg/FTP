@@ -11,6 +11,8 @@
 #include <string>
 #include <unistd.h>
 #include <map>
+#include <regex>
+#include <iterator>
 
 class ServerFTP;
 
@@ -23,19 +25,21 @@ public:
     void sendToClient(int clientSocket, const std::string& message);
 
 private:
-    int serverSocket_;
-    struct sockaddr_in serverAddr_;
-    using CommandHandler = void (CanalCommand::*)(int);
+    int serverSocket_command;
+    struct sockaddr_in serverAddr_command;
+
+    using CommandHandler = void (CanalCommand::*)(FTPClient *, std::vector<std::string>);
     std::map<std::string, CommandHandler> commandHandlers_;
+
     ClientQueueThreadPool* queueClient_;
     FTPClient* client;
 
     void setupServer(int port);
     void processCommand(FTPClient* client, const std::string& command);
-    void handleUserCommand(int clientSocket);
-    void handlePassCommand(int clientSocket);
-    void handleStorCommand(int clientSocket);
-    void handleRetrCommand(int clientSocket);
-    void handleQuitCommand(int clientSocket);
-    void handleListCommand(int clientSocket);
+    void handleUserCommand(FTPClient* client, std::vector<std::string> command);
+    void handlePassCommand(FTPClient* client, std::vector<std::string> command);
+    void handleStorCommand(FTPClient* client, std::vector<std::string> command);
+    void handleRetrCommand(FTPClient* client, std::vector<std::string> command);
+    void handleQuitCommand(FTPClient* client, std::vector<std::string> command);
+    void handleListCommand(FTPClient* client, std::vector<std::string> command);
 };

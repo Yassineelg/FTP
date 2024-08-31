@@ -1,58 +1,63 @@
 #include "../include/canal_command.hpp"
+#include "../include/canal_data.hpp"
 #include <cerrno>
 #include <cstring>
 #include <arpa/inet.h>
 
-CanalCommand::CanalCommand(int port, ClientQueueThreadPool* queueClient)
+CanalCommand::CanalCommand(int port, ClientQueueThreadPool *queueClient)
     : queueClient_(queueClient) {
     setupServer(port);
 
-//Login
+    // Login
     commandHandlers_["USER"] = &CanalCommand::handleUserCommand;
     commandHandlers_["PASS"] = &CanalCommand::handlePassCommand;
-//Transfer
+    // Transfer
     commandHandlers_["STOR"] = &CanalCommand::handleStorCommand;
     commandHandlers_["RETR"] = &CanalCommand::handleRetrCommand;
-//File action
+    // Transfer parameters
+    //commandHandlers_["PORT"] = &CanalCommand::handlePortCommand;
+    //commandHandlers_["PASV"] = &CanalCommand::handlePasvCommand;
+    // File action
     commandHandlers_["LIST"] = &CanalCommand::handleListCommand;
-//Logout
+    // Logout
     commandHandlers_["QUIT"] = &CanalCommand::handleQuitCommand;
 }
 
 void CanalCommand::setupServer(int port) {
-    serverSocket_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket_ < 0) {
+
+    serverSocket_command = socket(AF_INET, SOCK_STREAM, 0);
+    if (serverSocket_command < 0) {
         std::cerr << "Erreur de création du socket: " << std::strerror(errno) << std::endl;
         exit(EXIT_FAILURE);
     }
 
-    serverAddr_.sin_family = AF_INET;
-    serverAddr_.sin_addr.s_addr = INADDR_ANY;
-    serverAddr_.sin_port = htons(port);
+    serverAddr_command.sin_family = AF_INET;
+    serverAddr_command.sin_addr.s_addr = INADDR_ANY;
+    serverAddr_command.sin_port = htons(port);
 
-    if (bind(serverSocket_, (struct sockaddr*)&serverAddr_, sizeof(serverAddr_)) < 0) {
+    if (bind(serverSocket_command, (struct sockaddr *)&serverAddr_command, sizeof(serverAddr_command)) < 0) {
         std::cerr << "Erreur de liaison du socket: " << std::strerror(errno) << std::endl;
-        close(serverSocket_);
+        close(serverSocket_command);
         exit(EXIT_FAILURE);
     }
 
-    if (listen(serverSocket_, 5) < 0) {
+    if (listen(serverSocket_command, 5) < 0) {
         std::cerr << "Erreur d'écoute du socket: " << std::strerror(errno) << std::endl;
-        close(serverSocket_);
+        close(serverSocket_command);
         exit(EXIT_FAILURE);
     }
 
     std::cout << "Serveur FTP, Port : " << port << std::endl;
 }
 
-void CanalCommand::sendToClient(int clientSocket, const std::string& message) {
+void CanalCommand::sendToClient(int clientSocket, const std::string &message) {
     ssize_t bytesSent = write(clientSocket, message.c_str(), message.size());
     if (bytesSent < 0) {
         std::cerr << "Erreur d'écriture sur le socket " << clientSocket << ": " << std::strerror(errno) << std::endl;
     }
 }
 
-bool CanalCommand::handleClient(FTPClient* client) {
+bool CanalCommand::handleClient(FTPClient *client) {
     char buffer[1024];
     ssize_t bytesRead = read(client->socket_fd, buffer, sizeof(buffer) - 1);
 
@@ -73,7 +78,7 @@ bool CanalCommand::handleClient(FTPClient* client) {
 int CanalCommand::acceptClient() {
     sockaddr_in clientAddr;
     socklen_t clientAddrLen = sizeof(clientAddr);
-    int clientSocket = accept(serverSocket_, (struct sockaddr*)&clientAddr, &clientAddrLen);
+    int clientSocket = accept(serverSocket_command, (struct sockaddr *)&clientAddr, &clientAddrLen);
     if (clientSocket < 0) {
         std::cerr << "Erreur d'acceptation de la connexion: " << std::strerror(errno) << std::endl;
         return -1;
@@ -85,27 +90,34 @@ int CanalCommand::acceptClient() {
 }
 
 int CanalCommand::getServerSocket() const {
-    return serverSocket_;
+    return serverSocket_command;
 }
 
-void CanalCommand::processCommand(FTPClient* client, const std::string& command) {
+void CanalCommand::processCommand(FTPClient *client, const std::string &command) {
     this->client = client;
-    std::string commandKey = command.substr(0, 4);
-    bool isAuthenticated = client->authenticated;
+    std::vector<std::string> commands;
+    
+    std::regex re("\\s+");
+    std::sregex_token_iterator it(command.begin(), command.end(), re, -1);
+    std::sregex_token_iterator end;
+    while (it != end) {
+        commands.push_back(*it++);
+    }
 
-    bool isCommandAllowed = (isAuthenticated && commandKey != "USER" && commandKey != "PASS") || (!isAuthenticated && (commandKey == "USER" || commandKey == "PASS"));
+    bool isAuthenticated = client->authenticated;
+    bool isCommandAllowed = (isAuthenticated && commands[0] != "USER" && commands[0] != "PASS") || (!isAuthenticated && (commands[0] == "USER" || commands[0] == "PASS"));
     if (isCommandAllowed) {
-        queueClient_->enqueueClientTask(client->socket_fd, [this, client, commandKey, command]() {    
-            auto it = commandHandlers_.find(commandKey);
+        queueClient_->enqueueClientTask(client->socket_fd, [this, client, commands, command]()
+                                        {    
+            auto it = commandHandlers_.find(commands[0]);
             if (it != commandHandlers_.end()) {
-                    (this->*(it->second))(client->socket_fd);
+                (this->*(it->second))(client, commands);
             } else {
-                std::cout << "500 Syntax error, command unrecognized. \"" << command << '"' << std::endl;
+                std::cout << "500 Syntax error, command unrecognized. \"" << commands[0] << '"' << std::endl;
                 sendToClient(client->socket_fd, "500 Syntax error, command unrecognized.");
-            }
-        });
+            } });
     } else {
-        if (isAuthenticated && (commandKey == "USER" || commandKey == "PASS")) {
+        if (isAuthenticated && (commands[0] == "USER" || commands[0] == "PASS")) {
             std::cout << "530 Bad sequence of commands. Already Logged \"" << command << '"' << std::endl;
             sendToClient(client->socket_fd, "530 Bad sequence of commands.");
         } else {
@@ -115,62 +127,123 @@ void CanalCommand::processCommand(FTPClient* client, const std::string& command)
     }
 }
 
-//Login, Logout
-void CanalCommand::handleUserCommand(int clientSocket) {
+//Canal command
+
+// Login, Logout
+void CanalCommand::handleUserCommand(FTPClient* client, std::vector<std::string> command) {
     if (client->username.empty()) {
-        std::cout << "Socket: [" << clientSocket << "], Command: USER" << std::endl;
+        std::cout << "\nSocket: [" << client->socket_fd << "], Command: USER" << std::endl;
         client->username = "test";
-        sendToClient(clientSocket, "331 User name okay, need password.");
+        sendToClient(client->socket_fd, "331 User name okay, need password.");
     } else {
-        sendToClient(clientSocket, "503 Bad sequence of commands.");
+        sendToClient(client->socket_fd, "503 Bad sequence of commands.");
     }
 }
 
-void CanalCommand::handlePassCommand(int clientSocket) {
+void CanalCommand::handlePassCommand(FTPClient* client, std::vector<std::string> command) {
 
     if (client->username.empty()) {
-        sendToClient(clientSocket, "503 Bad sequence of commands.");
+        sendToClient(client->socket_fd, "503 Bad sequence of commands.");
         return;
     }
     if (true) { // gestion password et correct
-        std::cout << "Socket: [" << clientSocket << "], Command: PASS" << std::endl;
+        std::cout << "\nSocket: [" << client->socket_fd << "], Command: PASS" << std::endl;
         client->authenticated = true;
-        sendToClient(clientSocket, "230 User logged in, proceed.");
+        sendToClient(client->socket_fd, "230 User logged in, proceed.");
     } else {
-        sendToClient(clientSocket, "530 Not logged in.");
+        sendToClient(client->socket_fd, "530 Not logged in.");
     }
 }
 
-void CanalCommand::handleQuitCommand(int clientSocket) {
-    std::cout << "Socket: ["  << clientSocket << "], Command: QUIT " << std::endl;
-    sendToClient(clientSocket, "250 Command okay.");
+void CanalCommand::handleQuitCommand(FTPClient* client, std::vector<std::string> command) {
+    std::cout << "\nSocket: [" << client->socket_fd << "], Command: QUIT " << std::endl;
+    sendToClient(client->socket_fd, "250 Command okay.");
 }
 
-//File action
-void CanalCommand::handleListCommand(int clientSocket) {
-    std::cout << "Socket: ["  << clientSocket << "], Command: LIST " << std::endl;
-    sendToClient(clientSocket, "250 Command okay.");
+//Canal data
+
+// File action
+void CanalCommand::handleListCommand(FTPClient* client, std::vector<std::string> command) {
+    std::cout << "\nSocket: [" << client->socket_fd << "], Command: LIST " << std::endl;
+    sendToClient(client->socket_fd, "250 Command okay.");
 }
 
-//Transfer
-void CanalCommand::handleStorCommand(int clientSocket) {
-    std::cout << "Socket: [" << clientSocket << "], Command: STOR " << std::endl;
+void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string> command) { // clien -> server upload
+    std::cout << "\nSocket: [" << client->socket_fd << "], Command: STOR " << command[1] << std::endl;
+    sendToClient(client->socket_fd, "150 File status okay; about to open data connection.");
 
-    queueClient_->enqueueClientTask(clientSocket, [this, clientSocket]() {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-        std::cout << "STOR operation completed for socket " << clientSocket << std::endl;
-        sendToClient(clientSocket, "226 Transfer complete");
+    queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
+        if (!client->data_info || client->data_info->mode == FTPMode::Undefined) {
+            sendToClient(client->socket_fd, "425 Can't open data connection.");
+            return;
+        }
+
+        CanalData canalData(client->data_info);
+
+        if (!canalData.setupConnection()) {
+            sendToClient(client->socket_fd, "425 Can't open data connection.");
+            return;
+        }
+
+        std::string base_directory = "/Ftp_Client/" + client->username + "/" + client->current_directory;
+        std::string filepath = base_directory + "/" + command[1];
+        FILE* file = fopen(filepath.c_str(), "w");
+        if (file == nullptr) {
+            sendToClient(client->socket_fd, "451 Requested action aborted: local error in processing.");
+            return;
+        }
+
+        const size_t bufferSize = 4096;
+        char buffer[bufferSize];
+        ssize_t bytesRead;
+        while ((bytesRead = canalData.receiveData(buffer, bufferSize)) > 0) {
+            fwrite(buffer, 1, bytesRead, file);
+        }
+
+        if (bytesRead < 0) {
+            sendToClient(client->socket_fd, "426 Connection closed; transfer aborted.");
+        } else {
+            sendToClient(client->socket_fd, "226 Closing data connection; requested file action successful.");
+        }
+        fclose(file);
     });
-    sendToClient(clientSocket, "150 File status okay; about to open data connection.");
 }
 
-void CanalCommand::handleRetrCommand(int clientSocket) {
-    std::cout << "Socket: [" << clientSocket << "], Command: RETR " << std::endl;
+void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string> command) { // server -> client download
+    std::cout << "\nSocket: [" << client->socket_fd << "], Command: RETR " << command[1] << std::endl;
+    sendToClient(client->socket_fd, "150 File status okay; about to open data connection.");
 
-    queueClient_->enqueueClientTask(clientSocket, [this, clientSocket]() {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-        std::cout << "RETR operation completed for socket " << clientSocket << std::endl;
-        sendToClient(clientSocket, "226 Transfer complete");
+    queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
+        if (!client->data_info || client->data_info->mode == FTPMode::Undefined) {
+            sendToClient(client->socket_fd, "425 Can't open data connection.");
+            return;
+        }
+
+        CanalData canalData(client->data_info);
+
+        if (!canalData.setupConnection()) {
+            sendToClient(client->socket_fd, "425 Can't open data connection.");
+            return;
+        }
+
+        std::string base_directory = "/Ftp_Client/" + client->username + "/" + client->current_directory;
+        std::string filepath = base_directory + "/" + command[1];
+        FILE* file = fopen(filepath.c_str(), "r");
+        if (file == nullptr) {
+            sendToClient(client->socket_fd, "550 File not found.");
+            return;
+        }
+
+        const size_t bufferSize = 4096;
+        char buffer[bufferSize];
+        ssize_t bytesRead;
+        while ((bytesRead = fread(buffer, 1, bufferSize, file)) > 0) {
+            canalData.sendData(buffer, bytesRead);
+        }
+
+        fclose(file);
+
+        sendToClient(client->socket_fd, "226 Closing data connection; requested file action successful.");
     });
-    sendToClient(clientSocket, "150 File status okay; about to open data connection.");
 }
+

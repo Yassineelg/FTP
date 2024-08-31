@@ -13,7 +13,7 @@ Simple FTP
             Mode Actif : Le client informe le serveur du port sur lequel il est prêt à recevoir des données via la commande PORT.
                Le serveur se connecte alors au client pour transférer les données.
             Mode Passif : Le client envoie une commande PASV, demandant au serveur de lui fournir un port sur lequel le client se connectera pour
-               recevoir ou envoyer les données. Le serveur répond avec un port disponible.
+               recevoir les données. Le serveur répond avec un port disponible.
 
         Gestion des Transferts de Fichiers
             Création de thread + canal (socket), puis vérification et nettoyage une fois la fin du transfert.
@@ -31,7 +31,7 @@ Simple FTP
             Téléchargement (avec RETR)
             Téléversement (avec STOR)
         Déconnexion: Envoi de la Commande QUIT
-        
+
     voir ftps pour tls chiffrement securise
 
 

@@ -28,6 +28,7 @@ void ServerFTP::run() {
 
 void ServerFTP::handleNewConnection() {
     int clientSocket = commandServer_.acceptClient();
+
     if (clientSocket >= 0) {
         clients.emplace_back(clientSocket);
         poller_.add(clientSocket);
