@@ -10,11 +10,10 @@ enum class FTPMode {
 
 struct FTPDataInfo {
     FTPMode mode;
-    int socket_data_fd;
     int port_client;
 
     FTPDataInfo(FTPMode m = FTPMode::Undefined, int fd = -1, int port = -1)
-        : mode(m), socket_data_fd(fd), port_client(port) 
+        : mode(m), port_client(port) 
     {}
 };
 

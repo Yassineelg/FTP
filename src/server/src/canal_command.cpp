@@ -1,8 +1,6 @@
 #include "../include/canal_command.hpp"
 #include "../include/canal_data.hpp"
-#include <cerrno>
-#include <cstring>
-#include <arpa/inet.h>
+#include "../include/define.hpp"
 
 CanalCommand::CanalCommand(int port, ClientQueueThreadPool *queueClient)
     : queueClient_(queueClient) {
@@ -15,8 +13,8 @@ CanalCommand::CanalCommand(int port, ClientQueueThreadPool *queueClient)
     commandHandlers_["STOR"] = &CanalCommand::handleStorCommand;
     commandHandlers_["RETR"] = &CanalCommand::handleRetrCommand;
     // Transfer parameters
-    //commandHandlers_["PORT"] = &CanalCommand::handlePortCommand;
-    //commandHandlers_["PASV"] = &CanalCommand::handlePasvCommand;
+    commandHandlers_["PORT"] = &CanalCommand::handlePortCommand;
+    commandHandlers_["PASV"] = &CanalCommand::handlePasvCommand;
     // File action
     commandHandlers_["LIST"] = &CanalCommand::handleListCommand;
     // Logout
@@ -160,6 +158,84 @@ void CanalCommand::handleQuitCommand(FTPClient* client, std::vector<std::string>
     sendToClient(client->socket_fd, "250 Command okay.");
 }
 
+int CanalCommand::createAvailablePort() {
+    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket < 0) {
+        std::cerr << "Erreur lors de la création du socket" << std::endl;
+        return -1;
+    }
+
+    sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = 0;
+
+    if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        close(server_socket);
+        std::cerr << "Erreur lors du bind" << std::endl;
+        return -1;
+    }
+
+    sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(server_socket, (struct sockaddr*)&addr, &addr_len) < 0) {
+        close(server_socket);
+        std::cerr << "Erreur lors de la récupération du nom du socket" << std::endl;
+        return -1;
+    }
+
+    int port = ntohs(addr.sin_port);
+    portUse_.push_back(port);
+    close(server_socket);
+
+    return port;
+}
+
+void CanalCommand::handlePasvCommand(FTPClient* client, std::vector<std::string> command) {
+    std::cout << "\nSocket: [" << client->socket_fd << "], Command: PASV " << std::endl;
+
+    int port = createAvailablePort();
+    if (port == -1) {
+        sendToClient(client->socket_fd, "425 Can't open data connection.");
+        return;
+    }
+
+    client->data_info->mode = FTPMode::Passive;
+    client->data_info->port_client = port;
+
+    int p1 = port / 256;
+    int p2 = port % 256;
+    std::cout << "Server requested with port: " << port << std::endl;
+    sendToClient(client->socket_fd, std::string("227 Entering Passive Mode (" + std::string(IP_SERVER_FORMAT) + "," + std::to_string(p1) + "," + std::to_string(p2) + ")."));
+}
+
+void CanalCommand::handlePortCommand(FTPClient* client, std::vector<std::string> command) {
+    std::cout << "\nSocket: [" << client->socket_fd << "], Command: PORT " << std::endl;
+
+    if (command.size() != 2) {
+        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.");
+        return;
+    }
+
+    std::string portCmd = command[1];
+    std::replace(portCmd.begin(), portCmd.end(), ',', ' ');
+    std::istringstream iss(portCmd);
+    int a1, a2, a3, a4, p1, p2;
+
+    if (!(iss >> a1 >> a2 >> a3 >> a4 >> p1 >> p2)) {
+        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.");
+        return;
+    }
+
+    client->data_info->mode = FTPMode::Active;
+
+    int port = p1 * 256 + p2;
+    client->data_info->port_client = port;
+
+    std::cout << "Client requested PORT command with port: " << port << std::endl;
+    sendToClient(client->socket_fd, "250 Command okay.");
+}
+
 //Canal data
 
 // File action
@@ -246,4 +322,3 @@ void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string>
         sendToClient(client->socket_fd, "226 Closing data connection; requested file action successful.");
     });
 }
-

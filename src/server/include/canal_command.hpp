@@ -11,8 +11,12 @@
 #include <string>
 #include <unistd.h>
 #include <map>
+#include <vector>
 #include <regex>
 #include <iterator>
+#include <cerrno>
+#include <cstring>
+#include <arpa/inet.h>
 
 class ServerFTP;
 
@@ -34,12 +38,19 @@ private:
     ClientQueueThreadPool* queueClient_;
     FTPClient* client;
 
+    std::vector<int> portUse_;
+
     void setupServer(int port);
     void processCommand(FTPClient* client, const std::string& command);
+    int createAvailablePort();
+    
     void handleUserCommand(FTPClient* client, std::vector<std::string> command);
     void handlePassCommand(FTPClient* client, std::vector<std::string> command);
+    void handleQuitCommand(FTPClient* client, std::vector<std::string> command);
+    void handlePortCommand(FTPClient* client, std::vector<std::string> command);
+    void handlePasvCommand(FTPClient* client, std::vector<std::string> command);
+
     void handleStorCommand(FTPClient* client, std::vector<std::string> command);
     void handleRetrCommand(FTPClient* client, std::vector<std::string> command);
-    void handleQuitCommand(FTPClient* client, std::vector<std::string> command);
     void handleListCommand(FTPClient* client, std::vector<std::string> command);
 };
