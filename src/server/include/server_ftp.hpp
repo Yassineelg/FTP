@@ -1,5 +1,7 @@
 #pragma once
 
+#include "define.hpp"
+
 #include "canal_command.hpp"
 #include "poller.hpp"
 #include "ftp_client.hpp"
@@ -13,6 +15,8 @@
 #include <cerrno>
 #include <cstring>
 #include <future>
+#include <sys/stat.h>
+#include <errno.h>
 
 class ServerFTP {
 public:

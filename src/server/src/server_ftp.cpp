@@ -1,15 +1,14 @@
 #include "../include/server_ftp.hpp"
-#include "../include/poller.hpp"
 
-ServerFTP::ServerFTP(int portCommand) : queueClient_(10), commandServer_(portCommand, &queueClient_), poller_() {}
+ServerFTP::ServerFTP(int portCommand) : queueClient_(MAX_THREAD), commandServer_(portCommand, &queueClient_), poller_() { }
 
 ServerFTP::~ServerFTP() {
-    close(commandServer_.getServerSocket());
     for (const auto& client : clients) {
         if (client.socket_fd >= 0) {
             close(client.socket_fd);
         }
     }
+    close(commandServer_.getServerSocket());
 }
 
 void ServerFTP::run() {

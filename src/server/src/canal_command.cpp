@@ -56,7 +56,7 @@ void CanalCommand::sendToClient(int clientSocket, const std::string &message) {
 }
 
 bool CanalCommand::handleClient(FTPClient *client) {
-    char buffer[1024];
+    char buffer[BUFFER_SIZE_COMMAND];
     ssize_t bytesRead = read(client->socket_fd, buffer, sizeof(buffer) - 1);
 
     if (bytesRead > 0) {
@@ -246,7 +246,6 @@ void CanalCommand::handleListCommand(FTPClient* client, std::vector<std::string>
 
 void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string> command) { // clien -> server upload
     std::cout << "\nSocket: [" << client->socket_fd << "], Command: STOR " << command[1] << std::endl;
-    sendToClient(client->socket_fd, "150 File status okay; about to open data connection.");
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
         if (!client->data_info || client->data_info->mode == FTPMode::Undefined) {
@@ -261,6 +260,8 @@ void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string>
             return;
         }
 
+        sendToClient(client->socket_fd, "150 File status okay; about to open data connection.");
+
         std::string base_directory = "/Ftp_Client/" + client->username + "/" + client->current_directory;
         std::string filepath = base_directory + "/" + command[1];
         FILE* file = fopen(filepath.c_str(), "w");
@@ -269,7 +270,7 @@ void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string>
             return;
         }
 
-        const size_t bufferSize = 4096;
+        const size_t bufferSize = BUFFER_SIZE_DATA;
         char buffer[bufferSize];
         ssize_t bytesRead;
         while ((bytesRead = canalData.receiveData(buffer, bufferSize)) > 0) {
@@ -287,7 +288,6 @@ void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string>
 
 void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string> command) { // server -> client download
     std::cout << "\nSocket: [" << client->socket_fd << "], Command: RETR " << command[1] << std::endl;
-    sendToClient(client->socket_fd, "150 File status okay; about to open data connection.");
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
         if (!client->data_info || client->data_info->mode == FTPMode::Undefined) {
@@ -302,6 +302,8 @@ void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string>
             return;
         }
 
+        sendToClient(client->socket_fd, "150 File status okay; about to open data connection.");
+
         std::string base_directory = "/Ftp_Client/" + client->username + "/" + client->current_directory;
         std::string filepath = base_directory + "/" + command[1];
         FILE* file = fopen(filepath.c_str(), "r");
@@ -310,7 +312,7 @@ void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string>
             return;
         }
 
-        const size_t bufferSize = 4096;
+        const size_t bufferSize = BUFFER_SIZE_DATA;
         char buffer[bufferSize];
         ssize_t bytesRead;
         while ((bytesRead = fread(buffer, 1, bufferSize, file)) > 0) {

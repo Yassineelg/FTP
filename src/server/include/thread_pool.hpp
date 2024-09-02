@@ -1,5 +1,7 @@
 #pragma once
 
+#include "define.hpp"
+
 #include <vector>
 #include <thread>
 #include <functional>
@@ -9,7 +11,7 @@
 
 class ThreadPool {
 public:
-    ThreadPool(size_t numThreads);
+    ThreadPool(size_t numThreads = MAX_THREAD);
     ~ThreadPool();
 
     void enqueue(std::function<void()> task);
