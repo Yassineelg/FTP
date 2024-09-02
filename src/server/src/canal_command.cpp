@@ -269,23 +269,37 @@ void CanalCommand::handleCwdCommand(FTPClient* client, std::vector<std::string> 
         return;
     }
 
-    std::string complete_path = FTP_DIR_USER(client->username) + client->current_directory;
-    std::string newDirectory = client->current_directory + command[1] + "/";
-    try {
-        if (std::filesystem::exists(complete_path) && std::filesystem::is_directory(complete_path)) {
-            client->current_directory = newDirectory;
-            std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
-            sendToClient(client->socket_fd, "250 Directory successfully changed.");
+    std::string newDirectory = command[1];
+    if (newDirectory == "..") {
+        if (!client->current_directory.empty() && client->current_directory != "/" && client->current_directory.back() == '/') {
+            client->current_directory.pop_back(); 
         } else {
-            std::cerr << "Error: Directory \"" << newDirectory << "\" does not exist or is not a directory." << std::endl;
-            sendToClient(client->socket_fd, "550 Failed to change directory. Directory does not exist.");
+             sendToClient(client->socket_fd, "550 Cannot go up from root directory.");
+            return;
         }
-    } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unable to change directory due to a server error.");
-    } catch (const std::exception& e) {
-        std::cerr << "Unexpected error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unexpected error occurred.");
+        std::filesystem::path currentPath = client->current_directory;
+        client->current_directory = currentPath.parent_path();
+        client->current_directory += client->current_directory == "/" ? "" : "/";
+        std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
+        sendToClient(client->socket_fd, "250 Directory successfully changed.");
+    } else {
+        std::string fullPath = FTP_DIR_USER(client->username) + client->current_directory + newDirectory + "/";
+        try {
+            if (std::filesystem::exists(fullPath) && std::filesystem::is_directory(fullPath)) {
+                client->current_directory += newDirectory + "/";
+                std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
+                sendToClient(client->socket_fd, "250 Directory successfully changed.");
+            } else {
+                std::cerr << "Error: Directory \"" << fullPath << "\" does not exist or is not a directory." << std::endl;
+                sendToClient(client->socket_fd, "550 Failed to change directory. Directory does not exist.");
+            }
+        } catch (const std::filesystem::filesystem_error& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            sendToClient(client->socket_fd, "550 Unable to change directory due to a server error.");
+        } catch (const std::exception& e) {
+            std::cerr << "Unexpected error: " << e.what() << std::endl;
+            sendToClient(client->socket_fd, "550 Unexpected error occurred.");
+        }
     }
 }
 
@@ -325,6 +339,12 @@ int CanalCommand::createAvailablePort() {
 
 void CanalCommand::handlePasvCommand(FTPClient* client, std::vector<std::string> command) {
     std::cout << "\nSocket: [" << client->socket_fd << "], Command: PASV " << std::endl;
+
+    if (command.size() > 1) {
+        std::cerr << "Error: Syntax error in parameters or arguments." << std::endl;
+        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.");
+        return;
+    }
 
     int port = createAvailablePort();
     if (port == -1) {
@@ -386,6 +406,7 @@ void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string>
         sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.");
         return;
     }
+    sendToClient(client->socket_fd, "150 File status okay; about to open data connection.");
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
         if (!client->data_info || client->data_info->mode == FTPMode::Undefined) {
@@ -401,7 +422,7 @@ void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string>
             return;
         }
 
-        std::string filepath = std::string(FTP_DIR_USER(client->username)) + "/" + command[1];
+        std::filesystem::path filepath = FTP_DIR_USER(client->username) + client->current_directory + command[1];
         std::ofstream outFile(filepath, std::ios::out | std::ios::binary);
         if (!outFile) {
             std::cerr << "Error: Unable to create the file." << std::endl;
@@ -434,6 +455,7 @@ void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string>
         sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.");
         return;
     }
+    sendToClient(client->socket_fd, "150 File status okay; about to open data connection.");
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
         if (!client->data_info || client->data_info->mode == FTPMode::Undefined) {
@@ -449,14 +471,13 @@ void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string>
             return;
         }
 
-        std::string filepath = std::string(FTP_DIR_USER(client->username)) + "/" + command[1];
+        std::filesystem::path filepath = FTP_DIR_USER(client->username) + client->current_directory + command[1];
         FILE* file = fopen(filepath.c_str(), "rb");
         if (file == nullptr) {
             std::cerr << "Error: File not found: " << filepath << std::endl;
             sendToClient(client->socket_fd, "550 File not found.");
             return;
         }
-        sendToClient(client->socket_fd, "150 File status okay; about to open data connection.");
 
         const size_t bufferSize = BUFFER_SIZE_DATA;
         char buffer[bufferSize];
