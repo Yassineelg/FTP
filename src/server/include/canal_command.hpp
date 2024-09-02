@@ -54,6 +54,8 @@ private:
     void handlePwdCommand(FTPClient* client, std::vector<std::string> command);
     void handleMkdCommand(FTPClient* client, std::vector<std::string> command);
     void handleCwdCommand(FTPClient* client, std::vector<std::string> command);
+    void handleRmdCommand(FTPClient* client, std::vector<std::string> command);
+    void handleDeleCommand(FTPClient* client, std::vector<std::string> command);
 
     void handleStorCommand(FTPClient* client, std::vector<std::string> command);
     void handleRetrCommand(FTPClient* client, std::vector<std::string> command);
