@@ -11,12 +11,12 @@ CanalCommand::CanalCommand(int port, ClientQueueThreadPool *queueClient)
     commandHandlers_["PASS"] = &CanalCommand::handlePassCommand;
     // Transfer
     commandHandlers_["STOR"] = &CanalCommand::handleStorCommand;
-    commandHandlers_["RETR"] = &CanalCommand::handleRetrCommand; //todo
+    commandHandlers_["RETR"] = &CanalCommand::handleRetrCommand;
     // Transfer parameters
     commandHandlers_["PORT"] = &CanalCommand::handlePortCommand;
     commandHandlers_["PASV"] = &CanalCommand::handlePasvCommand;
     // File action
-    commandHandlers_["NLST"] = &CanalCommand::handleNlstCommand; //todo
+    commandHandlers_["NLST"] = &CanalCommand::handleNlstCommand;
     commandHandlers_["PWD"] = &CanalCommand::handlePwdCommand;
     commandHandlers_["CWD"] = &CanalCommand::handleCwdCommand;
     commandHandlers_["DELE"] = &CanalCommand::handleDeleCommand;
@@ -378,8 +378,6 @@ void CanalCommand::handleDeleCommand(FTPClient* client, std::vector<std::string>
     }
 }
 
-
-
 int CanalCommand::createAvailablePort() {
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
@@ -469,7 +467,7 @@ void CanalCommand::handlePortCommand(FTPClient* client, std::vector<std::string>
 
 //Canal data
 // NLST, STOR, RETR
-void CanalCommand::handleNlstCommand(FTPClient* client, std::vector<std::string> command) { //todo
+void CanalCommand::handleNlstCommand(FTPClient* client, std::vector<std::string> command) { //todo (passif mode)
     std::cout << "\nSocket: [" << client->socket_fd << "], Command: NLST " << std::endl;
 
     if (!client->data_info || client->data_info->mode == FTPMode::Undefined) {
@@ -479,7 +477,7 @@ void CanalCommand::handleNlstCommand(FTPClient* client, std::vector<std::string>
     }
     sendToClient(client->socket_fd, "150 Here comes the directory listing.");
 
-    queueClient_->enqueueClientTask(client->socket_fd, [this, client]() {
+    queueClient_->enqueueClientTask(client->socket_fd, [this, command, client]() {
         CanalData canalData(client->data_info);
         if (!canalData.setupConnection()) {
             std::cerr << "Error: Can't open data connection." << std::endl;
@@ -487,7 +485,7 @@ void CanalCommand::handleNlstCommand(FTPClient* client, std::vector<std::string>
             return;
         }
 
-        std::filesystem::path currentPath(client->current_directory);
+        std::filesystem::path currentPath = FTP_DIR_USER(client->username) + client->current_directory + command[1];
         if (!std::filesystem::exists(currentPath) || !std::filesystem::is_directory(currentPath)) {
             sendToClient(client->socket_fd, "550 Failed to list directory: Directory does not exist.");
             return;
@@ -558,7 +556,7 @@ void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string>
     });
 }
 
-void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string> command) {
+void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string> command) { //todo
     std::cout << "\nSocket: [" << client->socket_fd << "], Command: RETR " << command[1] << std::endl;
 
     if (command.size() != 2) {
