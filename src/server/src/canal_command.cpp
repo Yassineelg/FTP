@@ -18,7 +18,7 @@ CanalCommand::CanalCommand(int port, ClientQueueThreadPool *queueClient)
     // File action
     commandHandlers_["NLST"] = &CanalCommand::handleNlstCommand;
     commandHandlers_["PWD"] = &CanalCommand::handlePwdCommand;
-    //commandHandlers_["CWD"] = &CanalCommand::handleCwdCommand;
+    commandHandlers_["CWD"] = &CanalCommand::handleCwdCommand;
     //commandHandlers_["DELE"] = &CanalCommand::handleDeleCommand;
     commandHandlers_["MKD"] = &CanalCommand::handleMkdCommand;
     //commandHandlers_["RMD"] = &CanalCommand::handleRmdCommand;
@@ -241,20 +241,48 @@ void CanalCommand::handleMkdCommand(FTPClient* client, std::vector<std::string> 
         return;
     }
 
-    std::string path = FTP_DIR_USER(client->current_directory) + std::string("/") + command[1];
-    std::filesystem::path userDir(path);
+    std::filesystem::path complete_path = FTP_DIR_USER(client->username) + client->current_directory + command[1];
     try {
-        if (!std::filesystem::exists(userDir)) {
-            std::filesystem::create_directories(userDir);
-            std::cout << "Directory for user \"" << command[1] << "\" created successfully." << std::endl;
-            sendToClient(client->socket_fd, "257 \"" + command[1] + "\" directory created.");
+        if (!std::filesystem::exists(complete_path)) {
+            std::filesystem::create_directories(complete_path);
+            std::cout << "Directory for user " << client->current_directory + command[1] + "/" << " created successfully." << std::endl;
+            sendToClient(client->socket_fd, "257 " + client->current_directory + command[1] + "/" + " directory created.");
         } else {
-            std::cerr << "Error: Directory for user \"" << command[1] << "\" already exists." << std::endl;
+            std::cerr << "Error: Directory for user " << command[1] << " already exists." << std::endl;
             sendToClient(client->socket_fd, "550 Directory already exists.");
         }
     } catch (const std::filesystem::filesystem_error& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         sendToClient(client->socket_fd, "550 Unable to create directory.");
+    } catch (const std::exception& e) {
+        std::cerr << "Unexpected error: " << e.what() << std::endl;
+        sendToClient(client->socket_fd, "550 Unexpected error occurred.");
+    }
+}
+
+void CanalCommand::handleCwdCommand(FTPClient* client, std::vector<std::string> command) {
+    std::cout << "\nSocket: [" << client->socket_fd << "], Command: CWD " << std::endl;
+
+    if (command.size() != 2) {
+        std::cerr << "Error: Incorrect number of arguments for CWD command." << std::endl;
+        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.");
+        return;
+    }
+
+    std::string complete_path = FTP_DIR_USER(client->username) + client->current_directory;
+    std::string newDirectory = client->current_directory + command[1] + "/";
+    try {
+        if (std::filesystem::exists(complete_path) && std::filesystem::is_directory(complete_path)) {
+            client->current_directory = newDirectory;
+            std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
+            sendToClient(client->socket_fd, "250 Directory successfully changed.");
+        } else {
+            std::cerr << "Error: Directory \"" << newDirectory << "\" does not exist or is not a directory." << std::endl;
+            sendToClient(client->socket_fd, "550 Failed to change directory. Directory does not exist.");
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        sendToClient(client->socket_fd, "550 Unable to change directory due to a server error.");
     } catch (const std::exception& e) {
         std::cerr << "Unexpected error: " << e.what() << std::endl;
         sendToClient(client->socket_fd, "550 Unexpected error occurred.");
