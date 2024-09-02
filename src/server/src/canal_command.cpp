@@ -130,22 +130,79 @@ void CanalCommand::processCommand(FTPClient *client, const std::string &command)
 // Login, Logout
 void CanalCommand::handleUserCommand(FTPClient* client, std::vector<std::string> command) {
     if (client->username.empty()) {
-        std::cout << "\nSocket: [" << client->socket_fd << "], Command: USER" << std::endl;
-        client->username = "test";
-        sendToClient(client->socket_fd, "331 User name okay, need password.");
+        if (command.size() < 2) {
+            sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.");
+            return;
+        }
+
+        std::string username = command[1];
+        std::ifstream userFile(FTP_FILE_USERS);
+        if (!userFile.is_open()) {
+            std::cerr << "Erreur: Impossible d'ouvrir le fichier des utilisateurs." << std::endl;
+            sendToClient(client->socket_fd, "550 File not found.");
+            return;
+        }
+
+        std::string line;
+        bool userFound = false;
+        while (std::getline(userFile, line)) {
+            std::stringstream ss(line);
+            std::string fileUser, filePassword;
+            if (std::getline(ss, fileUser, ':') && std::getline(ss, filePassword)) {
+                if (fileUser == username) {
+                    userFound = true;
+                    break;
+                }
+            }
+        }
+        userFile.close();
+
+        if (userFound) {
+            client->username = username;
+            sendToClient(client->socket_fd, "331 User name okay, need password.");
+        } else {
+            sendToClient(client->socket_fd, "530 Not logged in.");
+        }
     } else {
         sendToClient(client->socket_fd, "503 Bad sequence of commands.");
     }
 }
 
 void CanalCommand::handlePassCommand(FTPClient* client, std::vector<std::string> command) {
-
     if (client->username.empty()) {
         sendToClient(client->socket_fd, "503 Bad sequence of commands.");
         return;
     }
-    if (true) { // gestion password et correct
-        std::cout << "\nSocket: [" << client->socket_fd << "], Command: PASS" << std::endl;
+
+    if (command.size() < 2) {
+        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.");
+        return;
+    }
+
+    std::string password = command[1];
+    std::ifstream userFile(FTP_FILE_USERS);
+    if (!userFile.is_open()) {
+        std::cerr << "Erreur: Impossible d'ouvrir le fichier des utilisateurs." << std::endl;
+        sendToClient(client->socket_fd, "550 File not found.");
+        return;
+    }
+
+    std::string line;
+    bool passwordMatched = false;
+    while (std::getline(userFile, line)) {
+        std::size_t delimiterPos = line.find(':');
+        if (delimiterPos != std::string::npos) {
+            std::string fileUser = line.substr(0, delimiterPos);
+            std::string filePassword = line.substr(delimiterPos + 1);
+            if (fileUser == client->username && filePassword == password) {
+                passwordMatched = true;
+                break;
+            }
+        }
+    }
+    userFile.close();
+
+    if (passwordMatched) {
         client->authenticated = true;
         sendToClient(client->socket_fd, "230 User logged in, proceed.");
     } else {

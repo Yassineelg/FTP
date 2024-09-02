@@ -17,6 +17,8 @@
 #include <cerrno>
 #include <cstring>
 #include <arpa/inet.h>
+#include <fstream>
+#include <sstream>
 
 class ServerFTP;
 
