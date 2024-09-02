@@ -6,7 +6,7 @@ Simple FTP
          Gestion des Connexions: Acceptation des Connexions: nouveau thread pour chaque clients connectés pour gérer sa session
             Authentification de l'Utilisateur: Commandes USER et PASS pour valider la connection.
                Les credentials utilisateurs seront stockés sur MongoDB, avec mot de passe chiffrer avec salt.
-            Gestion des Commandes FTP: Commandes de Gestion de Fichiers : LIST, RETR, STOR
+            Gestion des Commandes FTP: Commandes de Gestion de Fichiers : NLST, RETR, STOR
             Commande: QUIT
 
         Connexion de Données: Création d'un Port Spécifique pour les Transferts
@@ -23,7 +23,7 @@ Simple FTP
 
         Authentification avec le Serveur : Envoi des Commandes USER et PASS + gestion des erreurs
         Gestion des Commandes FTP: Envoi des Commandes de Gestion de Fichiers 
-            LIST, RETR, STOR
+            NLST, RETR, STOR
         Connexion de Données: Création d'une Connexion de Données pour les Transferts
             Mode Actif: envoi de la Commande PORT, Réception des Données pour pouvoir se connecte
             Mode Passif: Envoi de la Commande PASV, Réception du Port, Connexion au Port
@@ -38,10 +38,18 @@ Simple FTP
 2 Cannaux:
     Canal de Commande: 
         port: 21
-        commande: USER PASS QUIT LIST RETR STOR
+        commande: USER PASS QUIT NLST RETR STOR
     Canal de Données:
         port: dynamique celon actif ou passif
         fonction: Transferts des donnée des fichier ou autre des commande RETR ou STOR
+
+facultatif:
+   command:
+      PWD (repertoir actuel)
+      CWD (change repertoir)
+      DELE (delete fichier)
+      MKD (cree repertoir)
+      RMD (suprime repertoir)
 
 
 RFC 959:

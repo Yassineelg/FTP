@@ -13,7 +13,7 @@
 #define FTP_DIR_CONFIG std::string(std::string(FTP_ROOT_DIRECTORY) + std::string("config/")).c_str()
 #define FTP_DIR_USERS std::string(std::string(FTP_ROOT_DIRECTORY) + std::string("users/")).c_str()
 #define FTP_DIR_LOG std::string(std::string(FTP_ROOT_DIRECTORY) + std::string("log/")).c_str()
-#define FTP_DIR_USER(user) std::string(std::string(FTP_DIR_USERS) + std::string(user) + std::string("/")).c_str()
+#define FTP_DIR_USER(user) std::string(std::string(FTP_DIR_USERS) + std::string(user)).c_str()
 
 #define FTP_FILE_USERS std::string(std::string(FTP_DIR_USERS) + std::string("users")).c_str()
 #define FTP_FILE_CONFIG std::string(std::string(FTP_DIR_CONFIG) + std::string("config")).c_str()

@@ -72,5 +72,6 @@ void CanalData::closeConnection() {
         close(client_socket_);
         client_socket_ = -1;
     }
-    data_ = new FTPDataInfo();
+    data_->mode = FTPMode::Undefined;
+    data_->port_client = -1;
 }
