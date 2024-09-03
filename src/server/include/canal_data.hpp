@@ -17,7 +17,7 @@ class FTPDataInfo;
 
 class CanalData {
 public:
-    CanalData(FTPDataInfo *data);
+    CanalData(FTPDataInfo data);
     ~CanalData();
 
     bool setupConnection();
@@ -26,7 +26,7 @@ public:
     void closeConnection();
 
 private:
-    FTPDataInfo *data_;
+    FTPDataInfo data_;
     int server_socket_;
     int client_socket_; 
 };

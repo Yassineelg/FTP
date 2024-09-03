@@ -13,13 +13,13 @@ int main() {
     std::cout << "==========================" << std::endl;
     std::cout << "        FTP Server        " << std::endl;
     std::cout << "==========================" << std::endl;
+
     while (true) {
         int choice;
         displayMenu();
 
         std::cin >> choice;
         std::cout << std::endl;
-
         if (std::cin.fail()) {
             std::cin.clear();
             std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');

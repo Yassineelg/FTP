@@ -50,6 +50,10 @@ facultatif:
       DELE (delete fichier)
       MKD (cree repertoir)
       RMD (suprime repertoir)
+      TYPE (A ascii, I binary)
+      SIZE
+      MDTM (Modification Time))
+      CDUP
 
 
 RFC 959:

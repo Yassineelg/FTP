@@ -1,6 +1,6 @@
 #include "../include/canal_data.hpp"
 
-CanalData::CanalData(FTPDataInfo *data)
+CanalData::CanalData(FTPDataInfo data)
     : data_(data), server_socket_(-1), client_socket_(-1) {}
 
 CanalData::~CanalData() {
@@ -8,36 +8,41 @@ CanalData::~CanalData() {
 }
 
 bool CanalData::setupConnection() {
-    if (data_->mode == FTPMode::Passive) {
+    if (data_.mode == FTPMode::Passive) {
+        // Mode passif
         server_socket_ = socket(AF_INET, SOCK_STREAM, 0);
         if (server_socket_ < 0) {
+            std::cerr << "Error: Failed to create server socket." << std::endl;
             return false;
         }
 
         sockaddr_in server_addr;
         server_addr.sin_family = AF_INET;
         server_addr.sin_addr.s_addr = INADDR_ANY;
-        server_addr.sin_port = htons(data_->port_client);
+        server_addr.sin_port = htons(data_.port_client);
 
         if (bind(server_socket_, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+            std::cerr << "Error: Failed to bind server socket." << std::endl;
             close(server_socket_);
             return false;
         }
 
         if (listen(server_socket_, 1) < 0) {
+            std::cerr << "Error: Failed to listen on server socket." << std::endl;
             close(server_socket_);
             return false;
         }
 
         client_socket_ = accept(server_socket_, nullptr, nullptr);
         if (client_socket_ < 0) {
+            std::cerr << "Error: Failed to accept client connection." << std::endl;
             close(server_socket_);
             return false;
         }
 
         close(server_socket_);
         return true;
-    } else if (data_->mode == FTPMode::Active) {
+    } else if (data_.mode == FTPMode::Active) {
         client_socket_ = socket(AF_INET, SOCK_STREAM, 0);
         if (client_socket_ < 0) {
             return false;
@@ -45,7 +50,7 @@ bool CanalData::setupConnection() {
 
         sockaddr_in client_addr;
         client_addr.sin_family = AF_INET;
-        client_addr.sin_port = htons(data_->port_client);
+        client_addr.sin_port = htons(data_.port_client);
         client_addr.sin_addr.s_addr = INADDR_ANY;
 
         if (connect(client_socket_, (struct sockaddr *)&client_addr, sizeof(client_addr)) < 0) {
@@ -55,7 +60,6 @@ bool CanalData::setupConnection() {
 
         return true;
     }
-
     return false;
 }
 
@@ -72,6 +76,6 @@ void CanalData::closeConnection() {
         close(client_socket_);
         client_socket_ = -1;
     }
-    data_->mode = FTPMode::Undefined;
-    data_->port_client = -1;
+    data_.mode = FTPMode::Undefined;
+    data_.port_client = -1;
 }

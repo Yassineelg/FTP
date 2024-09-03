@@ -19,6 +19,12 @@
 #include <arpa/inet.h>
 #include <fstream>
 #include <sstream>
+#include <iomanip>
+#include <ctime>
+#include <sys/stat.h>
+#include <pwd.h>
+#include <grp.h>
+#include <dirent.h>
 
 class ServerFTP;
 
@@ -56,8 +62,10 @@ private:
     void handleCwdCommand(FTPClient* client, std::vector<std::string> command);
     void handleRmdCommand(FTPClient* client, std::vector<std::string> command);
     void handleDeleCommand(FTPClient* client, std::vector<std::string> command);
-
     void handleStorCommand(FTPClient* client, std::vector<std::string> command);
     void handleRetrCommand(FTPClient* client, std::vector<std::string> command);
     void handleNlstCommand(FTPClient* client, std::vector<std::string> command);
+    void handleTypeCommand(FTPClient* client, std::vector<std::string> command);
+    void handleListCommand(FTPClient* client, std::vector<std::string> command);
+    void handleCdupCommand(FTPClient* client, std::vector<std::string> command);
 };

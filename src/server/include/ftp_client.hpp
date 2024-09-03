@@ -1,19 +1,26 @@
 #pragma once
 
 #include <string>
+#include <memory>
 
 enum class FTPMode {
     Undefined,
     Active,
-    Passive
+    Passive,
+};
+
+enum class Type {
+    A,  // Ascii
+    I,  // Binary
 };
 
 struct FTPDataInfo {
     FTPMode mode;
+    Type type;
     int port_client;
 
-    FTPDataInfo(FTPMode m = FTPMode::Undefined, int fd = -1, int port = -1)
-        : mode(m), port_client(port) 
+    FTPDataInfo(FTPMode m = FTPMode::Undefined, int port = -1)
+        : mode(m), type(Type::A), port_client(port)
     {}
 };
 
@@ -22,17 +29,13 @@ struct FTPClient {
     std::string username;
     std::string current_directory;
     bool authenticated;
-    FTPDataInfo* data_info;
+    FTPDataInfo data_info;
 
     FTPClient(int fd = -1)
         : socket_fd(fd),
           username(""),
           current_directory("/"),
           authenticated(false),
-          data_info(new FTPDataInfo()) 
+          data_info()
     {}
-
-    ~FTPClient() {
-        delete data_info;
-    }
 };
