@@ -289,9 +289,13 @@ void CanalCommand::handleMkdCommand(FTPClient* client, std::vector<std::string> 
     }
 }
 
+static std::string simplifier(const std::string& chaine) {
+    std::regex rgx("/+");
+    return std::regex_replace(chaine, rgx, "/");
+}
+
 void CanalCommand::handleCwdCommand(FTPClient* client, std::vector<std::string> command) {
     std::cout << "\nSocket: [" << client->socket_fd << "], Command: CWD " << std::endl;
-
     if (command.size() != 2) {
         std::cerr << "Error: Incorrect number of arguments for CWD command." << std::endl;
         sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
@@ -303,6 +307,7 @@ void CanalCommand::handleCwdCommand(FTPClient* client, std::vector<std::string> 
     try {
         if (std::filesystem::exists(fullPath) && std::filesystem::is_directory(fullPath)) {
             client->current_directory += newDirectory + "/";
+            client->current_directory = simplifier(client->current_directory);
             std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
             sendToClient(client->socket_fd, "250 Directory successfully changed.\r\n");
         } else {
@@ -320,7 +325,6 @@ void CanalCommand::handleCwdCommand(FTPClient* client, std::vector<std::string> 
 
 void CanalCommand::handleCdupCommand(FTPClient* client, std::vector<std::string> command) {
     std::cout << "\nSocket: [" << client->socket_fd << "], Command: CDUP " << std::endl;
-
     if (command.size() != 1) {
         std::cerr << "Error: Incorrect number of arguments for CDUP command." << std::endl;
         sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
@@ -335,13 +339,10 @@ void CanalCommand::handleCdupCommand(FTPClient* client, std::vector<std::string>
     }
     std::filesystem::path currentPath = client->current_directory;
     client->current_directory = currentPath.parent_path();
-    if (client->current_directory != "/") {
-        client->current_directory += client->current_directory == "/" ? "" : "/";
-        std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
-        sendToClient(client->socket_fd, "250 Directory successfully changed.\r\n");
-    } else {
-        sendToClient(client->socket_fd, "550 Cannot go up from root directory.\r\n");
-    }
+    client->current_directory += client->current_directory == "/" ? "" : "/";
+    client->current_directory = simplifier(client->current_directory);
+    std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
+    sendToClient(client->socket_fd, "250 Directory successfully changed.\r\n");
 }
 
 void CanalCommand::handleRmdCommand(FTPClient* client, std::vector<std::string> command) {
@@ -594,7 +595,6 @@ void CanalCommand::handleListCommand(FTPClient* client, std::vector<std::string>
         return;
     }
 
-    sendToClient(client->socket_fd, "150 Here comes the directory listing.\r\n");
     queueClient_->enqueueClientTask(client->socket_fd, [this, command, client]() {
         CanalData canalData(client->data_info);
         if (!canalData.setupConnection()) {
@@ -641,11 +641,13 @@ void CanalCommand::handleListCommand(FTPClient* client, std::vector<std::string>
         }
         closedir(dir);
 
+        sendToClient(client->socket_fd, "150 Here comes the directory listing.\r\n");
         std::string fileListStr = fileList.str();
         if (fileListStr.empty()) {
             sendToClient(client->socket_fd, "226 No files found.\r\n");
         } else {
             if (canalData.sendData(fileListStr.c_str(), fileListStr.size())) {
+                std::cout << fileListStr << std::endl;
                 sendToClient(client->socket_fd, "226 Directory send OK.\r\n");
             } else {
                 sendToClient(client->socket_fd, "426 Connection closed; transfer aborted.\r\n");
@@ -667,7 +669,6 @@ void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string>
         sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
         return;
     }
-    sendToClient(client->socket_fd, "150 File status okay; about to open data connection.\r\n");
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
         CanalData canalData(client->data_info);
@@ -684,6 +685,7 @@ void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string>
             sendToClient(client->socket_fd, "451 Requested action aborted: local error in processing.\r\n");
             return;
         }
+        sendToClient(client->socket_fd, "150 File status okay; about to open data connection.\r\n");
 
         const size_t bufferSize = BUFFER_SIZE_DATA;
         char buffer[bufferSize];
@@ -715,7 +717,6 @@ void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string>
         sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
         return;
     }
-    sendToClient(client->socket_fd, "150 File status okay; about to open data connection.\r\n");
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
         CanalData canalData(client->data_info);
@@ -732,6 +733,7 @@ void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string>
             sendToClient(client->socket_fd, "550 File not found.\r\n");
             return;
         }
+        sendToClient(client->socket_fd, "150 File status okay; about to open data connection.\r\n");
 
         const size_t bufferSize = BUFFER_SIZE_DATA;
         char buffer[bufferSize];
