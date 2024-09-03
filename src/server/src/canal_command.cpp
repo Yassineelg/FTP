@@ -303,10 +303,22 @@ void CanalCommand::handleCwdCommand(FTPClient* client, std::vector<std::string> 
     }
 
     std::string newDirectory = command[1];
-    std::string fullPath = FTP_DIR_USER(client->username) + client->current_directory + newDirectory + "/";
+    bool is_child_dir = (command[1][0] != '/');
+    std::cout << is_child_dir << std::endl;
+    std::string fullPath = FTP_DIR_USER(client->username);
+    fullPath += (is_child_dir ? client->current_directory : "");
+    fullPath += newDirectory;
+    fullPath += "/";
+    fullPath = simplifier(fullPath);
+    std::cout << fullPath << std::endl;
     try {
         if (std::filesystem::exists(fullPath) && std::filesystem::is_directory(fullPath)) {
-            client->current_directory += newDirectory + "/";
+            if (is_child_dir) {
+                client->current_directory += newDirectory;
+            } else {
+                client->current_directory = newDirectory;
+            }
+            client->current_directory += "/";
             client->current_directory = simplifier(client->current_directory);
             std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
             sendToClient(client->socket_fd, "250 Directory successfully changed.\r\n");
@@ -552,6 +564,24 @@ void CanalCommand::handleNlstCommand(FTPClient* client, std::vector<std::string>
 
 static std::string getFilePermissions(const struct stat& fileStat) {
     std::string perms;
+
+    if (S_ISDIR(fileStat.st_mode)) {
+        perms += 'd';
+    } else if (S_ISREG(fileStat.st_mode)) {
+        perms += '-';
+    } else if (S_ISLNK(fileStat.st_mode)) {
+        perms += 'l';
+    } else if (S_ISCHR(fileStat.st_mode)) {
+        perms += 'c';
+    } else if (S_ISBLK(fileStat.st_mode)) {
+        perms += 'b';
+    } else if (S_ISFIFO(fileStat.st_mode)) {
+        perms += 'p';  // FIFO or pipe
+    } else if (S_ISSOCK(fileStat.st_mode)) {
+        perms += 's';
+    } else {
+        perms += '?';
+    }
     perms += (fileStat.st_mode & S_IRUSR) ? 'r' : '-';
     perms += (fileStat.st_mode & S_IWUSR) ? 'w' : '-';
     perms += (fileStat.st_mode & S_IXUSR) ? 'x' : '-';
