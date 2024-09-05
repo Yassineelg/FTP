@@ -17,8 +17,8 @@ CanalCommand::CanalCommand(int port, ClientQueueThreadPool *queueClient)
     commandHandlers_["PASV"] = &CanalCommand::handlePasvCommand; // Todo bug
     commandHandlers_["TYPE"] = &CanalCommand::handleTypeCommand; // Todo other type
     // information
-    //commandHandlers_["SIZE"] = &CanalCommand::handleSizeCommand; Todo
-    //commandHandlers_["MDTM"] = &CanalCommand::handleSizeCommand; Todo
+    commandHandlers_["SIZE"] = &CanalCommand::handleSizeCommand;
+    commandHandlers_["MDTM"] = &CanalCommand::handleMdtmCommand;
     // File action
     commandHandlers_["NLST"] = &CanalCommand::handleNlstCommand;
     commandHandlers_["LIST"] = &CanalCommand::handleListCommand;
@@ -261,6 +261,22 @@ void CanalCommand::handlePwdCommand(FTPClient* client, std::vector<std::string> 
     sendToClient(client->socket_fd, std::string("257 " + client->current_directory + " is the current directory\r\n"));
 }
 
+void CanalCommand::handleSizeCommand(FTPClient *client, std::vector<std::string> command) {
+    if (command.size() != 2) {
+        std::cerr << "Error: Incorrect number of arguments for MDTM command." << std::endl;
+        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+
+    std::string filename = command[1];
+    std::string filepath = std::string(FTP_DIR_USER(client->username)) + "/" + filename;
+    try {
+        sendToClient(client->socket_fd, "213 " + std::to_string(std::filesystem::file_size(filepath)) + " octets" + "\r\n");
+    } catch (const std::filesystem::filesystem_error& e) {
+        sendToClient(client->socket_fd, "550 File not found.\r\n");
+    }
+}
+
 void CanalCommand::handleMkdCommand(FTPClient* client, std::vector<std::string> command) {
     std::cout << "\nSocket: [" << client->socket_fd << "], Command: MKD " << std::endl;
 
@@ -286,6 +302,33 @@ void CanalCommand::handleMkdCommand(FTPClient* client, std::vector<std::string> 
     } catch (const std::exception& e) {
         std::cerr << "Unexpected error: " << e.what() << std::endl;
         sendToClient(client->socket_fd, "550 Unexpected error occurred.\r\n");
+    }
+}
+
+void CanalCommand::handleMdtmCommand(FTPClient* client, std::vector<std::string> command) {
+    if (command.size() != 2) {
+        std::cerr << "Error: Incorrect number of arguments for MDTM command." << std::endl;
+        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+
+    std::string filename = command[1];
+    std::string filepath = std::string(FTP_DIR_USER(client->username)) + "/" + filename;
+    std::filesystem::path filePath(filepath);
+
+    try {
+        std::filesystem::file_time_type fileTime = std::filesystem::last_write_time(filePath);
+
+        std::chrono::system_clock::time_point sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                fileTime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
+        );
+        std::time_t cftime = std::chrono::system_clock::to_time_t(sctp);
+        std::tm *tm = std::gmtime(&cftime);
+        std::string timeString = std::asctime(tm);
+        timeString.pop_back();
+        sendToClient(client->socket_fd, "213 " + timeString + "\r\n");
+    } catch (const std::filesystem::filesystem_error& e) {
+        sendToClient(client->socket_fd, "550 File not found.\r\n");
     }
 }
 
