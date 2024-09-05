@@ -21,10 +21,12 @@
 #include <sstream>
 #include <iomanip>
 #include <ctime>
+#include <chrono>
 #include <sys/stat.h>
 #include <pwd.h>
 #include <grp.h>
 #include <dirent.h>
+#include <filesystem>
 
 class ServerFTP;
 
@@ -68,4 +70,6 @@ private:
     void handleTypeCommand(FTPClient* client, std::vector<std::string> command);
     void handleListCommand(FTPClient* client, std::vector<std::string> command);
     void handleCdupCommand(FTPClient* client, std::vector<std::string> command);
+    void handleMdtmCommand(FTPClient* client, std::vector<std::string> command);
+    void handleSizeCommand(FTPClient* client, std::vector<std::string> command);
 };
