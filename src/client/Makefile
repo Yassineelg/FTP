@@ -5,8 +5,7 @@ INCLUDE_DIR := include
 LIB_DIR := lib
 BIN_DIR := bin
 
-SRCS := $(wildcard $(SRC_DIR)/*.cpp)
-
+SRCS := $(shell find $(SRC_DIR) -name '*.cpp')
 OBJS := $(SRCS:.cpp=.o)
 
 ifeq ($(OS),Windows_NT)
@@ -15,17 +14,23 @@ else
     TARGET := $(BIN_DIR)/ftp
 endif
 
-CXXFLAGS := -I$(INCLUDE_DIR) -L$(LIB_DIR) -std=c++20
+CXXFLAGS := -I$(INCLUDE_DIR) -std=c++20 -Wall -Wextra -Werror -pedantic
 
-all: $(TARGET) clean
+all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CXX) -o $@ $^ $(CXXFLAGS)
 
-re: clean all
+%.o: %.cpp
+	$(CXX) -c $< -o $@ $(CXXFLAGS)
 
 clean:
 	rm -f $(OBJS)
 
-fclean: clean
+fclean:
+	rm -f $(OBJS)
 	rm -f $(TARGET)
+
+re: fclean all clean
+
+.PHONY: all clean fclean re
