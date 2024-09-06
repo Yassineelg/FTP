@@ -1,0 +1,16 @@
+[2024-09-06 16:42:07] INFO: Connection established.
+[2024-09-06 16:42:07] INFO: Initial server response: 220 Bienvenue sur le serveur FTP de Exemple.com
+
+[2024-09-06 16:42:07] INFO: Connected to server.
+[2024-09-06 16:42:10] INFO: Logged in successfully.
+[2024-09-06 16:51:14] ERROR: Invalid port number.
+[2024-09-06 16:51:17] INFO: Connection established.
+[2024-09-06 16:51:17] INFO: Initial server response: 220 Bienvenue sur le serveur FTP de Exemple.com
+
+[2024-09-06 16:51:17] INFO: Connected to server.
+[2024-09-06 17:00:38] INFO: Connection established.
+[2024-09-06 17:00:38] INFO: Initial server response: 220 Bienvenue sur le serveur FTP de Exemple.com
+[2024-09-06 17:00:38] INFO: Connected to server.
+[2024-09-06 17:00:40] DEBUG: Response to USER: 331 User name okay, need password.
+[2024-09-06 17:00:40] DEBUG: Response to PASS: 230 User logged in, proceed.
+[2024-09-06 17:00:40] INFO: Logged in successfully.
