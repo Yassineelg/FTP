@@ -1,8 +1,11 @@
-#IDE's and editors files
+# Mac OS X Finder
+.DS_Store
+
+# IDE's and editors files
 .vscode
 .idea
 
-#binary files
+# binary files
 ftp
 ftp_server
 
