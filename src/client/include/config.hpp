@@ -8,7 +8,7 @@
 
 // Log Configuration
 #define LOG_FILE "ftp_client.log"
-#define LOG_PATH "./log/"
+#define LOG_PATH "./logs/"
 #define LOG_LEVEL LogLevel::INFO  // Default log level for the application
 
 #endif
