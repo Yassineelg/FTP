@@ -1,10 +1,12 @@
 #include "./../../include/cli/CLI.hpp"
+#include "./../../include/core/CommandHandler.hpp"
 #include "./../../include/service/Logger.hpp"
 #include "./../../include/Color.hpp"
 #include "./../../include/config.hpp"
 #include <iostream>
 
-CLI::CLI(FTPClient* ftpClient) : ftpClient(ftpClient) {}
+CLI::CLI(FTPClient* ftpClient, CommandHandler* commandHandler)
+    : ftpClient(ftpClient), commandHandler(commandHandler) {}
 
 void CLI::start() const {
     connectToServer();
@@ -48,10 +50,16 @@ void CLI::loginToServer() const {
 }
 
 void CLI::processCommands() const {
+    std::string command;
+
     while (true) {
         showPrompt();
-        std::string command;
         std::getline(std::cin, command);
+
+        if (command.empty()) {
+            Logger::warn("Empty command entered.");
+            continue;
+        }
 
         if (command == "QUIT") {
             ftpClient->close();
@@ -59,8 +67,11 @@ void CLI::processCommands() const {
             break;
         }
 
-        std::string response = ftpClient->sendCommand(command);
-        std::cout << response << std::endl;
+        const size_t spacePos = command.find(' ');
+        std::string cmd = (spacePos == std::string::npos) ? command : command.substr(0, spacePos);
+        std::string args = (spacePos == std::string::npos) ? "" : command.substr(spacePos + 1);
+
+        commandHandler->handleCommand(cmd, args);
     }
 }
 

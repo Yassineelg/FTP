@@ -9,7 +9,9 @@ int main() {
 
     NetworkService networkService;
     FTPClient ftpClient(&networkService);
-    const CLI cli(&ftpClient);
+
+    CommandHandler commandHandler(&ftpClient);
+    const CLI cli(&ftpClient, &commandHandler);
 
     cli.start();
     return 0;

@@ -2,15 +2,16 @@
 #define CLI_HPP
 
 #include "core/FTPClient.hpp"
-#include "service/Logger.hpp"
+#include "core/CommandHandler.hpp"
 
 class CLI {
 public:
-    explicit CLI(FTPClient* ftpClient);
+    explicit CLI(FTPClient* ftpClient, CommandHandler* commandHandler);
     void start() const;
 
 private:
     FTPClient* ftpClient;
+    CommandHandler* commandHandler;
 
     void connectToServer() const;
     void loginToServer() const;
@@ -19,4 +20,4 @@ private:
     static std::string getUserInput(const std::string& prompt, const std::string& defaultValue = "");
 };
 
-#endif
+#endif // CLI_HPP
