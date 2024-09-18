@@ -1,4 +1,12 @@
-#include "../include/main.hpp"
+#include "server_ftp.hpp"
+#include "config_user_manager.hpp"
+#include "configserver.hpp"
+
+#include <iostream>
+#include <limits>
+#include <string>
+#include <fstream>
+
 
 void displayMenu() {
     std::cout << std::endl;
@@ -13,6 +21,8 @@ int main() {
     std::cout << "==========================" << std::endl;
     std::cout << "        FTP Server        " << std::endl;
     std::cout << "==========================" << std::endl;
+
+    ConfigServer configServer;
 
     while (true) {
         int choice;
@@ -33,7 +43,7 @@ int main() {
                 manager.configUsersServer();
                 break;
             case 2: {
-                ServerFTP server;
+                ServerFTP server(&configServer);
                 server.run();
                 return 0;
             }

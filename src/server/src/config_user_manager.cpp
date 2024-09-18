@@ -1,26 +1,54 @@
-#include "../include/config_user_manager.hpp"
+#include "config_user_manager.hpp"
 
-void ConfigUserManager::addUser() {
-    std::cout << "    Add a new user:" << std::endl;
-    std::string username;
-    std::string password;
+static std::string generateSalt() {
+    unsigned char salt[16];
+    if (!RAND_bytes(salt, sizeof(salt))) {
+        throw std::runtime_error("Unable to generate salt");
+    }
+    std::stringstream ss;
+    for (int i = 0; i < sizeof(salt); ++i) {
+        ss << std::setw(2) << std::setfill('0') << std::hex << (int)salt[i];
+    }
+    return ss.str();
+}
 
-    std::cout << "      Username: ";
-    std::cin >> username;
-    std::cout << "      Password: ";
-    std::cin >> password;
+static std::string hashPassword(const std::string& password, const std::string& salt) {
+    std::string saltedPassword = password + salt;
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hashLen;
 
-    std::ofstream file(FTP_FILE_USERS, std::ios::app);
+    EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+    if (!mdctx) throw std::runtime_error("Unable to create EVP_MD_CTX");
+
+    if (1 != EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL)) throw std::runtime_error("Unable to initialize digest");
+    if (1 != EVP_DigestUpdate(mdctx, saltedPassword.c_str(), saltedPassword.size())) throw std::runtime_error("Unable to update digest");
+    if (1 != EVP_DigestFinal_ex(mdctx, hash, &hashLen)) throw std::runtime_error("Unable to finalize digest");
+
+    EVP_MD_CTX_free(mdctx);
+
+    std::stringstream ss;
+    for (unsigned int i = 0; i < hashLen; ++i) {
+        ss << std::setw(2) << std::setfill('0') << std::hex << (int)hash[i];
+    }
+    return ss.str();
+}
+
+
+void ConfigUserManager::addUser(const std::string& username, const std::string& password) {
+    std::string salt = generateSalt();
+    std::string hashedPassword = hashPassword(password, salt);
+
+    std::ofstream file(FTP_DEFAULT_FILE_USERS, std::ios::app);
     if (file.is_open()) {
-        file << username << ":" << password << std::endl;
+        file << username << ":" << hashedPassword << ":" << salt << std::endl;
         file.close();
         std::cout << "      User \"" << username << "\" added successfully." << std::endl;
     } else {
-        std::cerr << "      Error: Unable to open file \"" << FTP_FILE_USERS << "\"." << std::endl;
+        std::cerr << "      Error: Unable to open file \"" << FTP_DEFAULT_FILE_USERS << "\"." << std::endl;
         return;
     }
 
-    std::filesystem::path userDir = std::filesystem::path(FTP_DIR_USER(username));
+    std::filesystem::path userDir = std::filesystem::path(FTP_DEFAULT_DIR_USER(username));
     try {
         if (!std::filesystem::exists(userDir)) {
             std::filesystem::create_directories(userDir);
@@ -33,15 +61,48 @@ void ConfigUserManager::addUser() {
     }
 }
 
-void ConfigUserManager::removeUser() {
-    std::cout << "    Remove a user:" << std::endl;
-    std::string username;
-    std::cout << "      Username: ";
-    std::cin >> username;
-
-    std::ifstream fileIn(FTP_FILE_USERS);
+void ConfigUserManager::changePassword(const std::string& username, const std::string& newPassword) {
+    std::ifstream fileIn(FTP_DEFAULT_FILE_USERS);
     if (!fileIn.is_open()) {
-        std::cerr << "      Error: Unable to open file \"" << FTP_FILE_USERS << "\"." << std::endl;
+        std::cerr << "    Error: Unable to open file \"" << FTP_DEFAULT_FILE_USERS << "\"." << std::endl;
+        return;
+    }
+
+    std::vector<std::string> lines;
+    std::string line;
+    bool userFound = false;
+    while (std::getline(fileIn, line)) {
+        std::string currentUsername = line.substr(0, line.find(':'));
+        if (currentUsername == username) {
+            std::string salt = line.substr(line.rfind(':') + 1);
+            std::string hashedPassword = hashPassword(newPassword, salt);
+            line = username + ":" + hashedPassword + ":" + salt;
+            userFound = true;
+        }
+        lines.push_back(line);
+    }
+    fileIn.close();
+
+    if (!userFound) {
+        std::cerr << "      Error: User \"" << username << "\" not found." << std::endl;
+        return;
+    }
+    std::ofstream fileOut(FTP_DEFAULT_FILE_USERS);
+    if (!fileOut.is_open()) {
+        std::cerr << "      Error: Unable to open file \"" << FTP_DEFAULT_FILE_USERS << "\" for writing." << std::endl;
+        return;
+    }
+    for (const auto& l : lines) {
+        fileOut << l << std::endl;
+    }
+    fileOut.close();
+    std::cout << "      Password for \"" << username << "\" changed successfully." << std::endl;
+}
+
+void ConfigUserManager::removeUser(const std::string& username) {
+    std::ifstream fileIn(FTP_DEFAULT_FILE_USERS);
+    if (!fileIn.is_open()) {
+        std::cerr << "      Error: Unable to open file \"" << FTP_DEFAULT_FILE_USERS << "\"." << std::endl;
         return;
     }
 
@@ -53,9 +114,9 @@ void ConfigUserManager::removeUser() {
         }
     }
     fileIn.close();
-    std::ofstream fileOut(FTP_FILE_USERS);
+    std::ofstream fileOut(FTP_DEFAULT_FILE_USERS);
     if (!fileOut.is_open()) {
-        std::cerr << "      Error: Unable to open file \"" << FTP_FILE_USERS << "\" for writing." << std::endl;
+        std::cerr << "      Error: Unable to open file \"" << FTP_DEFAULT_FILE_USERS << "\" for writing." << std::endl;
         return;
     }
     for (const auto& l : lines) {
@@ -63,7 +124,7 @@ void ConfigUserManager::removeUser() {
     }
     fileOut.close();
 
-    std::filesystem::path userDir = std::filesystem::path(FTP_DIR_USER(username));
+    std::filesystem::path userDir = std::filesystem::path(FTP_DEFAULT_DIR_USER(username));
     try {
         if (std::filesystem::exists(userDir)) {
             std::filesystem::remove_all(userDir);
@@ -76,86 +137,64 @@ void ConfigUserManager::removeUser() {
     }
 }
 
-void ConfigUserManager::changePassword() {
-    std::cout << "    Change password:" << std::endl;
-    std::string username, newPassword;
-    std::cout << "      Username: ";
-    std::cin >> username;
-    std::cout << "      New password: ";
-    std::cin >> newPassword;
+void ConfigUserManager::displayMenu() {
+    std::cout << "\n  Server Configuration Users:" << std::endl;
+    std::cout << "    1. Add a user" << std::endl;
+    std::cout << "    2. Remove a user" << std::endl;
+    std::cout << "    3. Change password" << std::endl;
+    std::cout << "    4. Return to main menu\n" << std::endl;
+    std::cout << "    Select number: ";
+}
 
-    std::ifstream fileIn(FTP_FILE_USERS);
-    if (!fileIn.is_open()) {
-        std::cerr << "    Error: Unable to open file \"" << FTP_FILE_USERS << "\"." << std::endl;
-        return;
+bool ConfigUserManager::handleUserInput() {
+    int choice;
+    std::cin >> choice;
+    std::cout << std::endl;
+
+    if (std::cin.fail()) {
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        std::cout << "    Invalid input. Please enter a number." << std::endl;
+        return false;
     }
 
-    std::vector<std::string> lines;
-    std::string line;
-    bool userFound = false;
-    while (std::getline(fileIn, line)) {
-        std::string currentUsername = line.substr(0, line.find(':'));
-        if (currentUsername == username) {
-            line = username + ":" + newPassword;
-            userFound = true;
-        }
-        lines.push_back(line);
-    }
-    fileIn.close();
+    std::cout << std::endl;
 
-    if (!userFound) {
-        std::cerr << "      Error: User \"" << username << "\" not found." << std::endl;
-        return;
+    std::string username, password;
+    switch (choice) {
+    case 1:
+        std::cout << "      Username: ";
+        std::cin >> username;
+        std::cout << "      Password: ";
+        std::cin >> password;
+        addUser(username, password);
+        break;
+    case 2:
+        std::cout << "      Username: ";
+        std::cin >> username;
+        removeUser(username);
+        break;
+    case 3:
+        std::cout << "      Username: ";
+        std::cin >> username;
+        std::cout << "      New password: ";
+        std::cin >> password;
+        changePassword(username, password);
+        break;
+    case 4:
+        return true;
+    default:
+        std::cout << "\n    Invalid choice. Please select a valid number." << std::endl;
+        break;
     }
-    std::ofstream fileOut(FTP_FILE_USERS);
-    if (!fileOut.is_open()) {
-        std::cerr << "      Error: Unable to open file \"" << FTP_FILE_USERS << "\" for writing." << std::endl;
-        return;
-    }
-    for (const auto& l : lines) {
-        fileOut << l << std::endl;
-    }
-    fileOut.close();
-    std::cout << "      Password for \"" << username << "\" changed successfully." << std::endl;
+    return false;
 }
 
 void ConfigUserManager::configUsersServer() {
     while (true) {
-        std::cout << "\n  Server Configuration Users:" << std::endl;
-        std::cout << "    1. Add a user" << std::endl;
-        std::cout << "    2. Remove a user" << std::endl;
-        std::cout << "    3. Change password" << std::endl;
-        std::cout << "    4. Return to main menu\n" << std::endl;
-        std::cout << "    Select number: ";
-
-        int choice;
-        std::cin >> choice;
-        std::cout << std::endl;
-
-        if (std::cin.fail()) {
-            std::cin.clear();
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-            std::cout << "    Invalid input. Please enter a number." << std::endl;
-            continue;
-        }
-
-        std::cout << std::endl;
-
-        switch (choice) {
-            case 1:
-                addUser();
-                break;
-            case 2:
-                removeUser();
-                break;
-            case 3:
-                changePassword();
-                break;
-            case 4:
-                return;
-            default:
-                std::cout << "\n    Invalid choice. Please select a valid number." << std::endl;
-                break;
+        displayMenu();
+        if (handleUserInput()) {
+            return;
         }
     }
 }

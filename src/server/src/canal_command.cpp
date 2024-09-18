@@ -1,29 +1,54 @@
-#include "../include/canal_command.hpp"
-#include "../include/canal_data.hpp"
-#include "../include/define.hpp"
+#include "canal_command.hpp"
 
-CanalCommand::CanalCommand(int port, ClientQueueThreadPool *queueClient)
-    : queueClient_(queueClient) {
-    setupServer(port);
+CanalCommand::CanalCommand(ConfigServer *configServ, ClientQueueThreadPool* queueClient)
+    : configServer_(configServ), queueClient_(queueClient) {
+
+    setupServer(configServer_->getConfigValue<int>(configServer_->ConfigKey::PORT_));
+
+    client_ = nullptr;
+    if (configServer_->getConfigValue<std::string>(configServer_->ConfigKey::SSL_ACTIVATE_) == "true") {
+        bool eSsl = true;
+        if (!sslConnect_.initialize()) {
+            eSsl = false;
+        }
+        std::string key_file(FTP_DEFAULT_DIR_SSL + "server.key");
+        std::string cert_file(FTP_DEFAULT_DIR_SSL + "server.crt");
+        if (!sslConnect_.configure(cert_file.c_str(), key_file.c_str())) {
+            eSsl = false;
+        }
+        if (eSsl) {
+        //FTPS, FTPES
+            commandHandlers_["AUTH"] = &CanalCommand::handleAuthCommand;
+            commandHandlers_["PBSZ"] = &CanalCommand::handlePbszCommand;
+            commandHandlers_["PROT"] = &CanalCommand::handleProtCommand;
+        }
+    }
 
     // Login
     commandHandlers_["USER"] = &CanalCommand::handleUserCommand;
     commandHandlers_["PASS"] = &CanalCommand::handlePassCommand;
+    commandHandlers_["REIN"] = &CanalCommand::handleReinCommand;
     // Transfer
     commandHandlers_["STOR"] = &CanalCommand::handleStorCommand;
     commandHandlers_["RETR"] = &CanalCommand::handleRetrCommand;
+    commandHandlers_["ALLO"] = &CanalCommand::handleAlloCommand;
+    // System
+    commandHandlers_["NOOP"] = &CanalCommand::handleNoopCommand;
+    commandHandlers_["SYST"] = &CanalCommand::handleSystCommand;
     // Transfer parameters
-    commandHandlers_["PORT"] = &CanalCommand::handlePortCommand;
-    commandHandlers_["PASV"] = &CanalCommand::handlePasvCommand; // Todo bug
+    commandHandlers_["PORT"] = &CanalCommand::handlePortCommand; 
+    commandHandlers_["PASV"] = &CanalCommand::handlePasvCommand;
     commandHandlers_["TYPE"] = &CanalCommand::handleTypeCommand; // Todo other type
     // information
     commandHandlers_["SIZE"] = &CanalCommand::handleSizeCommand;
     commandHandlers_["MDTM"] = &CanalCommand::handleMdtmCommand;
+    commandHandlers_["STAT"] = &CanalCommand::handleStatCommand;
+    commandHandlers_["FEAT"] = &CanalCommand::handleFeatCommand;
     // File action
     commandHandlers_["NLST"] = &CanalCommand::handleNlstCommand;
     commandHandlers_["LIST"] = &CanalCommand::handleListCommand;
     commandHandlers_["PWD"] = &CanalCommand::handlePwdCommand;
-    commandHandlers_["CWD"] = &CanalCommand::handleCwdCommand; // Todo ".."
+    commandHandlers_["CWD"] = &CanalCommand::handleCwdCommand;
     commandHandlers_["CDUP"] = &CanalCommand::handleCdupCommand;
     commandHandlers_["DELE"] = &CanalCommand::handleDeleCommand;
     commandHandlers_["MKD"] = &CanalCommand::handleMkdCommand;
@@ -32,43 +57,119 @@ CanalCommand::CanalCommand(int port, ClientQueueThreadPool *queueClient)
     commandHandlers_["QUIT"] = &CanalCommand::handleQuitCommand;
 }
 
-void CanalCommand::setupServer(int port) {
+static std::string getLogFileName() {
+    std::time_t t = std::time(nullptr);
+    std::tm* now = std::localtime(&t);
 
-    serverSocket_command = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket_command < 0) {
-        std::cerr << "Erreur de création du socket: " << std::strerror(errno) << std::endl;
-        exit(EXIT_FAILURE);
-    }
-
-    serverAddr_command.sin_family = AF_INET;
-    serverAddr_command.sin_addr.s_addr = INADDR_ANY;
-    serverAddr_command.sin_port = htons(port);
-
-    if (bind(serverSocket_command, (struct sockaddr *)&serverAddr_command, sizeof(serverAddr_command)) < 0) {
-        std::cerr << "Erreur de liaison du socket: " << std::strerror(errno) << std::endl;
-        close(serverSocket_command);
-        exit(EXIT_FAILURE);
-    }
-
-    if (listen(serverSocket_command, 5) < 0) {
-        std::cerr << "Erreur d'écoute du socket: " << std::strerror(errno) << std::endl;
-        close(serverSocket_command);
-        exit(EXIT_FAILURE);
-    }
-
-    std::cout << "Serveur FTP, Port : " << port << std::endl;
+    std::ostringstream oss;
+    oss << FTP_DEFAULT_DIR_LOG;
+    oss << "log_" << (now->tm_year + 1900) << '-'
+        << (now->tm_mon + 1) << '-'
+        << now->tm_mday << ".log";
+    return oss.str();
 }
 
-void CanalCommand::sendToClient(int clientSocket, const std::string &message) {
-    ssize_t bytesSent = write(clientSocket, message.c_str(), message.size());
-    if (bytesSent < 0) {
-        std::cerr << "Erreur d'écriture sur le socket " << clientSocket << ": " << std::strerror(errno) << std::endl;
+std::string CanalCommand::getTime() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+    std::tm* local_time = std::localtime(&now_time);
+    std::ostringstream time_;
+    time_ << "["
+               << std::setw(2) << std::setfill('0') << local_time->tm_hour << ":" << std::setw(2) << std::setfill('0') << local_time->tm_min << " "
+               << std::setw(2) << std::setfill('0') << local_time->tm_mday << "/" << std::setw(2) << std::setfill('0') << (local_time->tm_mon + 1) << "/" << (local_time->tm_year % 100)
+               << "] ";
+    return time_.str();
+}
+
+void CanalCommand::setLogClient(std::string message) {
+    std::ostringstream logMessage;
+    logMessage << getTime();
+    if (client_) {
+        try {
+            if (client_->username.empty()) {
+                logMessage << client_->socket_fd << " (Not Log) : ";
+            } else {
+                logMessage << client_->socket_fd << " (" << client_->username << ") : ";
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error accessing client data: " << e.what() << std::endl;
+            logMessage << "undefined (Not Log) : ";
+        }
+    } else {
+        logMessage << "undefined (Not Log) : ";
+    }
+    logMessage << message;
+
+    // log Consol
+    std::cout << logMessage.str() << std::endl;
+    std::cout << std::endl;
+
+    // SaveLog
+    std::string logFileName = getLogFileName();
+    std::ofstream logFile(logFileName, std::ios_base::app);
+    if (logFile.is_open()) {
+        logFile << logMessage.str() << std::endl;
+    } else {
+        std::cerr << "Erreur : impossible d'ouvrir le fichier de log." << std::endl;
+    }
+}
+
+void CanalCommand::setupServer(int port) {
+    std::ostringstream logMessage;
+
+    serverSocketCommand_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (serverSocketCommand_ < 0) {
+        serverStart_ = false;
+        return;
+    }
+
+    serverAddrCommand_.sin_family = AF_INET;
+    serverAddrCommand_.sin_addr.s_addr = INADDR_ANY;
+    serverAddrCommand_.sin_port = htons(port);
+
+    if (bind(serverSocketCommand_, (struct sockaddr *)&serverAddrCommand_, sizeof(serverAddrCommand_)) < 0) {
+        close(serverSocketCommand_);
+        serverStart_ = false;
+        return;
+    }
+
+    if (listen(serverSocketCommand_, 5) < 0) {
+        close(serverSocketCommand_);
+        serverStart_ = false;
+        return;
+    }
+
+    serverStart_ = true;
+    logMessage << getTime() << " Serveur Vortex FTP Start, Port : " << port << "\n";
+    std::cout << logMessage.str() << std::endl;
+}
+
+void CanalCommand::sendToClient(FTPClient *client, const std::string &message) {
+    if (client->is_secure) {
+        if (sslConnect_.sslSend(client->ssl, message.c_str()) <= 0) {
+            std::ostringstream logMessage;
+            logMessage << "Erreur d'écriture sur le socket SSL " << SSL_get_fd(client->ssl) << ": " << std::strerror(errno) << std::endl;
+            setLogClient(logMessage.str());
+        }
+    } else {
+        if (send(client->socket_fd, message.c_str(), message.length(), 0) < 0) {
+            std::ostringstream logMessage;
+            logMessage << "Erreur d'écriture sur le socket " << client->socket_fd << ": " << std::strerror(errno) << std::endl;
+            setLogClient(logMessage.str());
+        }
     }
 }
 
 bool CanalCommand::handleClient(FTPClient *client) {
-    char buffer[BUFFER_SIZE_COMMAND];
-    ssize_t bytesRead = read(client->socket_fd, buffer, sizeof(buffer) - 1);
+    char buffer[configServer_->getConfigValue<int>(configServer_->ConfigKey::BUFFER_SIZE_COMMAND_)];
+    ssize_t bytesRead;
+    std::ostringstream logMessage;
+
+    if (client->is_secure) {
+      bytesRead = SSL_read(client->ssl, buffer, sizeof(buffer) - 1);
+    } else {
+        bytesRead = read(client->socket_fd, buffer, sizeof(buffer) - 1);
+    }
 
     if (bytesRead > 0) {
         buffer[bytesRead] = '\0';
@@ -76,10 +177,17 @@ bool CanalCommand::handleClient(FTPClient *client) {
         processCommand(client, command);
         return true;
     } else if (bytesRead == 0) {
-        std::cout << "Client déconnecté proprement, socket " << client->socket_fd << std::endl;
+        logMessage << "Client Disconnect" << std::endl;
+        setLogClient(logMessage.str());
         return false;
     } else {
-        std::cerr << "Erreur de lecture du socket " << client->socket_fd << ": " << std::strerror(errno) << std::endl;
+        if (client->is_secure) {
+            int ssl_error = SSL_get_error(client->ssl, bytesRead);
+            logMessage << "Erreur de lecture du socket SSL " << client->socket_fd << ": " << ssl_error << " - " << std::strerror(errno) << std::endl;
+        } else {
+            logMessage << "Erreur de lecture du socket " << client->socket_fd << ": " << std::strerror(errno) << std::endl;
+        }
+        std::cout << (logMessage.str()) << std::endl;
         return false;
     }
 }
@@ -87,26 +195,35 @@ bool CanalCommand::handleClient(FTPClient *client) {
 int CanalCommand::acceptClient() {
     sockaddr_in clientAddr;
     socklen_t clientAddrLen = sizeof(clientAddr);
-    int clientSocket = accept(serverSocket_command, (struct sockaddr *)&clientAddr, &clientAddrLen);
+    std::ostringstream logMessage;
+
+    int clientSocket = accept(serverSocketCommand_, (struct sockaddr *)&clientAddr, &clientAddrLen);
     if (clientSocket < 0) {
-        std::cerr << "Erreur d'acceptation de la connexion: " << std::strerror(errno) << std::endl;
+        logMessage << "Erreur d'acceptation de la connexion: " << std::strerror(errno) << std::endl;
+        std::cout << (logMessage.str()) << std::endl;
         return -1;
     }
 
     std::string clientIP = inet_ntoa(clientAddr.sin_addr);
-    std::cout << "Client connecté (IP: " << clientIP << ", socket: " << clientSocket << ")" << std::endl;
-    sendToClient(clientSocket, "220 Bienvenue sur le serveur FTP de Exemple.com\r\n");
+    logMessage << "Client connected (IP: " << clientIP << ")" << std::endl;
+    setLogClient(logMessage.str());
+    std::string message = "220 " + configServer_->getConfigValue<std::string>(configServer_->ConfigKey::FTP_BANNER_) + "\r\n";
+    if (send(clientSocket, message.c_str(), message.length(), 0) < 0) {
+        std::ostringstream logMessage;
+        logMessage << "Erreur d'écriture sur le socket " << clientSocket << ": " << std::strerror(errno) << std::endl;
+        setLogClient(logMessage.str());
+    }
     return clientSocket;
 }
 
 int CanalCommand::getServerSocket() const {
-    return serverSocket_command;
+    return serverSocketCommand_;
 }
 
 void CanalCommand::processCommand(FTPClient *client, const std::string &command) {
-    this->client = client;
+    client_ = client;
     std::vector<std::string> commands;
-    
+
     std::regex re("\\s+");
     std::sregex_token_iterator it(command.begin(), command.end(), re, -1);
     std::sregex_token_iterator end;
@@ -114,43 +231,95 @@ void CanalCommand::processCommand(FTPClient *client, const std::string &command)
         commands.push_back(*it++);
     }
 
+    std::ostringstream logMessage;
     bool isAuthenticated = client->authenticated;
-    bool isCommandAllowed = (isAuthenticated && commands[0] != "USER" && commands[0] != "PASS") || (!isAuthenticated && (commands[0] == "USER" || commands[0] == "PASS"));
-    if (isCommandAllowed) {
-        queueClient_->enqueueClientTask(client->socket_fd, [this, client, commands, command]() {    
-            auto it = commandHandlers_.find(commands[0]);
-            if (it != commandHandlers_.end()) {
+    bool isCommandAllowed = (isAuthenticated && commands[0] != "USER" && commands[0] != "PASS") ||
+                            (!isAuthenticated && (commands[0] == "USER" || commands[0] == "PASS"));
+
+    if (isCommandAllowed || commands[0] == "QUIT" || commands[0] == "AUTH") {
+        std::ostringstream logMessage;
+        auto it = commandHandlers_.find(commands[0]);
+        if (it != commandHandlers_.end()) {
+            logMessage << "Command : ";
+            for (size_t i = 0; i < commands.size(); i++)
+                logMessage << commands[i] << ' ';
+            setLogClient(logMessage.str());
+            if (commands[0] == "AUTH") {
                 (this->*(it->second))(client, commands);
             } else {
-                std::cout << "500 Syntax error, command unrecognized. \"" << commands[0] << '"' << std::endl;
-                sendToClient(client->socket_fd, "500 Syntax error, command unrecognized.\r\n");
+                queueClient_->enqueueClientTask(client->socket_fd, [this, client, commands, it]() {
+                    (this->*(it->second))(client, commands);
+                });
             }
-        });
+        } else {
+            logMessage << "500 Syntax error, command unrecognized. \"" << commands[0] << '"' << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "500 Syntax error, command unrecognized.\r\n");
+        }
     } else {
         if (isAuthenticated && (commands[0] == "USER" || commands[0] == "PASS")) {
-            std::cout << "530 Bad sequence of commands. Already Logged \"" << command << '"' << std::endl;
-            sendToClient(client->socket_fd, "530 Bad sequence of commands.\r\n");
+            logMessage << "530 Bad sequence of commands. Already Logged \"" << command << '"' << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "530 Bad sequence of commands.\r\n");
         } else {
-            std::cout << "530 Not logged in or command not allowed. \"" << command << '"' << std::endl;
-            sendToClient(client->socket_fd, "530 Not logged in or command not allowed.\r\n");
+            logMessage << "530 Not logged in or command not allowed. \"" << command << '"' << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "530 Not logged in or command not allowed.\r\n");
         }
     }
 }
 
 //Canal command
-// USER, PASS, QUIT, PASV, PORT
+// AUTH, USER, PASS, REIN, QUIT, PASV, PORT, SIZE, NOOP, SYST, ALLO, STAT, FEAT
+
+void CanalCommand::handleAuthCommand(FTPClient *client, std::vector<std::string> commands) {
+    setLogClient(commands[0]);
+    if (commands.size() < 2) {
+        setLogClient("Syntax error in parameters or arguments.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+
+    std::string authMethod = commands[1];
+    if (client->is_secure) {
+        std::cout << "534 Security mechanism already established." << std::endl;
+        sendToClient(client, "534 Security mechanism already established.\r\n");
+        return;
+    }
+
+    SSL* ssl = nullptr;
+    if (authMethod == "TLS" || authMethod == "SSL") {
+        sendToClient(client, "234 Proceed with negotiation\r\n");
+        ssl = sslConnect_.acceptConnection(client->socket_fd);
+        if (ssl) {
+            client->ssl = ssl;
+            client->is_secure = true;
+            client->is_tls_negotiated = (authMethod == "TLS");
+            client->type_protocole = TypeProtocole::FTPES;
+            client->context = sslConnect_.getContext();
+            setLogClient("SSL/TLS negotiation successful");
+        } else {
+            setLogClient("Service not available, closing control connection.");
+            sendToClient(client, "421 Service not available, closing control connection.\r\n");
+        }
+    } else {
+        sendToClient(client, "504 Command not implemented for that parameter\r\n");
+    }
+}
+
 void CanalCommand::handleUserCommand(FTPClient* client, std::vector<std::string> command) {
     if (client->username.empty()) {
         if (command.size() < 2) {
-            sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+            setLogClient("501 Syntax error in parameters or arguments.");
+            sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
             return;
         }
 
         std::string username = command[1];
-        std::ifstream userFile(FTP_FILE_USERS);
+        std::ifstream userFile(FTP_DEFAULT_FILE_USERS);
         if (!userFile.is_open()) {
-            std::cerr << "Erreur: Impossible d'ouvrir le fichier des utilisateurs." << std::endl;
-            sendToClient(client->socket_fd, "550 File not found.\r\n");
+            setLogClient("Erreur: Impossible d'ouvrir le fichier des utilisateurs.");
+            sendToClient(client, "550 File not found.\r\n");
             return;
         }
 
@@ -170,46 +339,77 @@ void CanalCommand::handleUserCommand(FTPClient* client, std::vector<std::string>
 
         if (userFound) {
             client->username = username;
-            sendToClient(client->socket_fd, "331 User name okay, need password.\r\n");
+            sendToClient(client, "331 User name okay, need password.\r\n");
         } else {
-            sendToClient(client->socket_fd, "530 Not logged in.\r\n");
+            setLogClient("530 Not logged in.");
+            sendToClient(client, "530 Not logged in.\r\n");
         }
     } else {
-        sendToClient(client->socket_fd, "503 Bad sequence of commands.\r\n");
+        setLogClient("503 Bad sequence of commands.");
+        sendToClient(client, "503 Bad sequence of commands.\r\n");
     }
+}
+
+static std::string hashPassword(const std::string& password, const std::string& salt) {
+    std::string saltedPassword = password + salt;
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hashLen;
+
+    EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+    if (!mdctx) throw std::runtime_error("Unable to create EVP_MD_CTX");
+
+    if (1 != EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL)) throw std::runtime_error("Unable to initialize digest");
+    if (1 != EVP_DigestUpdate(mdctx, saltedPassword.c_str(), saltedPassword.size())) throw std::runtime_error("Unable to update digest");
+    if (1 != EVP_DigestFinal_ex(mdctx, hash, &hashLen)) throw std::runtime_error("Unable to finalize digest");
+
+    EVP_MD_CTX_free(mdctx);
+
+    std::stringstream ss;
+    for (unsigned int i = 0; i < hashLen; ++i) {
+        ss << std::setw(2) << std::setfill('0') << std::hex << (int)hash[i];
+    }
+    return ss.str();
 }
 
 void CanalCommand::handlePassCommand(FTPClient* client, std::vector<std::string> command) {
     if (client->username.empty()) {
-        std::cerr << "Error: Bad sequence of commands." << std::endl;
-        sendToClient(client->socket_fd, "503 Bad sequence of commands.\r\n");
+        setLogClient("Error: Bad sequence of commands.");
+        sendToClient(client, "503 Bad sequence of commands.\r\n");
         return;
     }
 
     if (command.size() < 2) {
-        std::cerr << "Error: Syntax error in parameters or arguments." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Syntax error in parameters or arguments.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
 
     std::string password = command[1];
-    std::ifstream userFile(FTP_FILE_USERS);
+    std::ifstream userFile(FTP_DEFAULT_FILE_USERS);
     if (!userFile.is_open()) {
-        std::cerr << "Erreur: Impossible d'ouvrir le fichier des utilisateurs." << std::endl;
-        sendToClient(client->socket_fd, "550 File not found.\r\n");
+        setLogClient("Erreur: Impossible d'ouvrir le fichier des utilisateurs.");
+        sendToClient(client, "550 File not found.\r\n");
         return;
     }
 
     std::string line;
     bool passwordMatched = false;
     while (std::getline(userFile, line)) {
-        std::size_t delimiterPos = line.find(':');
-        if (delimiterPos != std::string::npos) {
-            std::string fileUser = line.substr(0, delimiterPos);
-            std::string filePassword = line.substr(delimiterPos + 1);
-            if (fileUser == client->username && filePassword == password) {
-                passwordMatched = true;
-                break;
+        std::size_t delimiterPos1 = line.find(':');
+        if (delimiterPos1 != std::string::npos) {
+            std::string fileUser = line.substr(0, delimiterPos1);
+            std::size_t delimiterPos2 = line.find(':', delimiterPos1 + 1);
+            if (delimiterPos2 != std::string::npos) {
+                std::string filePassword = line.substr(delimiterPos1 + 1, delimiterPos2 - delimiterPos1 - 1);
+                std::string salt = line.substr(delimiterPos2 + 1);
+
+                if (fileUser == client->username) {
+                    std::string hashedPassword = hashPassword(password, salt);
+                    if (filePassword == hashedPassword) {
+                        passwordMatched = true;
+                        break;
+                    }
+                }
             }
         }
     }
@@ -217,118 +417,95 @@ void CanalCommand::handlePassCommand(FTPClient* client, std::vector<std::string>
 
     if (passwordMatched) {
         client->authenticated = true;
-        sendToClient(client->socket_fd, "230 User logged in, proceed.\r\n");
+        sendToClient(client, "230 User logged in, proceed.\r\n");
     } else {
-        sendToClient(client->socket_fd, "530 Not logged in.\r\n");
+        sendToClient(client, "530 Not logged in.\r\n");
     }
+}
+
+void CanalCommand::handleReinCommand(FTPClient* client, std::vector<std::string> command) {
+    if (!client) {
+        return;
+    }
+
+    if (client->is_secure && client->ssl) {
+        SSL_shutdown(client->ssl);
+        SSL_free(client->ssl);
+        client->ssl = nullptr;
+        client->is_tls_negotiated = false;
+    }
+
+    client->username.clear();
+    client->current_directory = "/";
+    client->authenticated = false;
+
+    sendToClient(client, "220 Service ready for new user.\r\n");
 }
 
 void CanalCommand::handleQuitCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: QUIT " << std::endl;
-    sendToClient(client->socket_fd, "250 Command okay.\r\n");
+    sendToClient(client, "250 Command okay.\r\n");
 }
 
 void CanalCommand::handleTypeCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "Socket: [" << client->socket_fd << "], Command: TYPE" << std::endl;
-
     if (command.size() != 2) {
-        std::cout << "Socket: [" << client->socket_fd << "], Invalid command format." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Erreur: Invalid command format.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
-    std::cout << "Socket: [" << client->socket_fd << "], Received argument: " << command[1] << std::endl;
+
     if (command[1] == "I") {
         client->data_info.type = Type::I;
-        std::cout << "Socket: [" << client->socket_fd << "], Setting type to BINARY (I)." << std::endl;
-        sendToClient(client->socket_fd, "200 Type set to I.\r\n");
+        setLogClient("Setting type to BINARY (I).");
+        sendToClient(client, "200 Type set to I.\r\n");
     } else if (command[1] == "A") {
         client->data_info.type = Type::A;
-        std::cout << "Socket: [" << client->socket_fd << "], Setting type to ASCII (A)." << std::endl;
-        sendToClient(client->socket_fd, "200 Type set to A.\r\n");
+        setLogClient("Setting type to ASCII (A).");
+        sendToClient(client, "200 Type set to A.\r\n");
     } else {
-        std::cout << "Socket: [" << client->socket_fd << "], Invalid type parameter: " << command[1] << std::endl;
-        sendToClient(client->socket_fd, "504 Command not implemented for that parameter.\r\n");
+        std::ostringstream logMessage;
+        logMessage << "Socket: [" << client->socket_fd << "], Invalid type parameter: " << command[1] << std::endl;
+        setLogClient(logMessage.str());
+        sendToClient(client, "504 Command not implemented for that parameter.\r\n");
     }
 }
 
 void CanalCommand::handlePwdCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: PWD " << std::endl;
     if (command.size() > 1) {
-        std::cerr << "Error: Too many arguments for PWD command." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Too many arguments for PWD command.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
-    sendToClient(client->socket_fd, std::string("257 " + client->current_directory + " is the current directory\r\n"));
-}
-
-void CanalCommand::handleSizeCommand(FTPClient *client, std::vector<std::string> command) {
-    if (command.size() != 2) {
-        std::cerr << "Error: Incorrect number of arguments for MDTM command." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
-        return;
-    }
-
-    std::string filename = command[1];
-    std::string filepath = std::string(FTP_DIR_USER(client->username)) + "/" + filename;
-    try {
-        sendToClient(client->socket_fd, "213 " + std::to_string(std::filesystem::file_size(filepath)) + " octets" + "\r\n");
-    } catch (const std::filesystem::filesystem_error& e) {
-        sendToClient(client->socket_fd, "550 File not found.\r\n");
-    }
+    sendToClient(client, std::string("257 " + client->current_directory + " is the current directory\r\n"));
 }
 
 void CanalCommand::handleMkdCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: MKD " << std::endl;
-
     if (command.size() != 2) {
-        std::cerr << "Error: Incorrect number of arguments for MKD command." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Incorrect number of arguments for MKD command.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
 
-    std::filesystem::path complete_path = FTP_DIR_USER(client->username) + client->current_directory + command[1];
+    std::filesystem::path complete_path = FTP_DEFAULT_DIR_USER(client->username) + client->current_directory + command[1];
+    std::ostringstream logMessage;
     try {
         if (!std::filesystem::exists(complete_path)) {
             std::filesystem::create_directories(complete_path);
-            std::cout << "Directory for user " << client->current_directory + command[1] + "/" << " created successfully." << std::endl;
-            sendToClient(client->socket_fd, "257 " + client->current_directory + command[1] + "/" + " directory created.\r\n");
+            logMessage << "Directory for user " << client->current_directory + command[1] + "/" << " created successfully." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "257 " + client->current_directory + command[1] + "/" + " directory created.\r\n");
         } else {
-            std::cerr << "Error: Directory for user " << command[1] << " already exists." << std::endl;
-            sendToClient(client->socket_fd, "550 Directory already exists.\r\n");
+            logMessage << "Error: Directory for user " << command[1] << " already exists." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "550 Directory already exists.\r\n");
         }
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unable to create directory.\r\n");
+        logMessage << "Error: " << e.what() << std::endl;
+        setLogClient(logMessage.str());
+        sendToClient(client, "550 Unable to create directory.\r\n");
     } catch (const std::exception& e) {
-        std::cerr << "Unexpected error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unexpected error occurred.\r\n");
-    }
-}
-
-void CanalCommand::handleMdtmCommand(FTPClient* client, std::vector<std::string> command) {
-    if (command.size() != 2) {
-        std::cerr << "Error: Incorrect number of arguments for MDTM command." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
-        return;
-    }
-
-    std::string filename = command[1];
-    std::string filepath = std::string(FTP_DIR_USER(client->username)) + "/" + filename;
-    std::filesystem::path filePath(filepath);
-
-    try {
-        std::filesystem::file_time_type fileTime = std::filesystem::last_write_time(filePath);
-
-        std::chrono::system_clock::time_point sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                fileTime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
-        );
-        std::time_t cftime = std::chrono::system_clock::to_time_t(sctp);
-        std::tm *tm = std::gmtime(&cftime);
-        std::string timeString = std::asctime(tm);
-        timeString.pop_back();
-        sendToClient(client->socket_fd, "213 " + timeString + "\r\n");
-    } catch (const std::filesystem::filesystem_error& e) {
-        sendToClient(client->socket_fd, "550 File not found.\r\n");
+        logMessage << "Unexpected error: " << e.what() << std::endl;
+        setLogClient(logMessage.str());
+        sendToClient(client, "550 Unexpected error occurred.\r\n");
     }
 }
 
@@ -338,22 +515,20 @@ static std::string simplifier(const std::string& chaine) {
 }
 
 void CanalCommand::handleCwdCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: CWD " << std::endl;
     if (command.size() != 2) {
-        std::cerr << "Error: Incorrect number of arguments for CWD command." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Incorrect number of arguments for CWD command.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
 
     std::string newDirectory = command[1];
     bool is_child_dir = (command[1][0] != '/');
-    std::cout << is_child_dir << std::endl;
-    std::string fullPath = FTP_DIR_USER(client->username);
+    std::string fullPath = FTP_DEFAULT_DIR_USER(client->username);
     fullPath += (is_child_dir ? client->current_directory : "");
     fullPath += newDirectory;
     fullPath += "/";
     fullPath = simplifier(fullPath);
-    std::cout << fullPath << std::endl;
+    std::ostringstream logMessage;
     try {
         if (std::filesystem::exists(fullPath) && std::filesystem::is_directory(fullPath)) {
             if (is_child_dir) {
@@ -363,33 +538,37 @@ void CanalCommand::handleCwdCommand(FTPClient* client, std::vector<std::string> 
             }
             client->current_directory += "/";
             client->current_directory = simplifier(client->current_directory);
-            std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
-            sendToClient(client->socket_fd, "250 Directory successfully changed.\r\n");
+            logMessage << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "250 Directory successfully changed.\r\n");
         } else {
-            std::cerr << "Error: Directory \"" << fullPath << "\" does not exist or is not a directory." << std::endl;
-            sendToClient(client->socket_fd, "550 Failed to change directory. Directory does not exist.\r\n");
+            logMessage << "Error: Directory \"" << fullPath << "\" does not exist or is not a directory." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "550 Failed to change directory. Directory does not exist.\r\n");
         }
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unable to change directory due to a server error.\r\n");
+        logMessage << "Error: " << e.what() << std::endl;
+        setLogClient(logMessage.str());
+        sendToClient(client, "550 Unable to change directory due to a server error.\r\n");
     } catch (const std::exception& e) {
-        std::cerr << "Unexpected error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unexpected error occurred.\r\n");
+        logMessage << "Unexpected error: " << e.what() << std::endl;
+        setLogClient(logMessage.str());
+        sendToClient(client, "550 Unexpected error occurred.\r\n");
     }
 }
 
 void CanalCommand::handleCdupCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: CDUP " << std::endl;
     if (command.size() != 1) {
-        std::cerr << "Error: Incorrect number of arguments for CDUP command." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Incorrect number of arguments for CDUP command.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
 
     if (!client->current_directory.empty() && client->current_directory != "/" && client->current_directory.back() == '/') {
         client->current_directory.pop_back(); 
     } else {
-            sendToClient(client->socket_fd, "550 Cannot go up from root directory.\r\n");
+            sendToClient(client, "550 Cannot go up from root directory.\r\n");
+            setLogClient("Error: Cannot go up from root directory.");
         return;
     }
     std::filesystem::path currentPath = client->current_directory;
@@ -397,88 +576,100 @@ void CanalCommand::handleCdupCommand(FTPClient* client, std::vector<std::string>
     client->current_directory += client->current_directory == "/" ? "" : "/";
     client->current_directory = simplifier(client->current_directory);
     std::cout << "Directory changed to \"" << client->current_directory << "\" successfully." << std::endl;
-    sendToClient(client->socket_fd, "250 Directory successfully changed.\r\n");
+    sendToClient(client, "250 Directory successfully changed.\r\n");
 }
 
 void CanalCommand::handleRmdCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: RMD " << std::endl;
-
     if (command.size() != 2) {
-        std::cerr << "Error: Incorrect number of arguments for RMD command." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Incorrect number of arguments for RMD command.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
 
-    std::filesystem::path complete_path = FTP_DIR_USER(client->username) + client->current_directory + command[1];
+    std::filesystem::path complete_path = FTP_DEFAULT_DIR_USER(client->username) + client->current_directory + command[1];
+    std::ostringstream logMessage;
     try {
         if (!std::filesystem::exists(complete_path)) {
-            std::cerr << "Error: Directory " << complete_path << " does not exist." << std::endl;
-            sendToClient(client->socket_fd, "550 Directory not found.\r\n");
+            logMessage << "Error: Directory " << complete_path << " does not exist." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "550 Directory not found.\r\n");
             return;
         }
         if (!std::filesystem::is_directory(complete_path)) {
-            std::cerr << "Error: Path " << complete_path << " is not a directory." << std::endl;
-            sendToClient(client->socket_fd, "550 Not a directory.\r\n");
+            logMessage << "Error: Path " << complete_path << " is not a directory." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "550 Not a directory.\r\n");
             return;
         }
 
         if (std::filesystem::remove(complete_path)) {
-            std::cout << "Directory " << complete_path << " removed successfully." << std::endl;
-            sendToClient(client->socket_fd, "250 Directory successfully removed.\r\n");
+            logMessage << "Directory " << complete_path << " removed successfully." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "250 Directory successfully removed.\r\n");
         } else {
-            std::cerr << "Error: Failed to remove directory " << complete_path << "." << std::endl;
-            sendToClient(client->socket_fd, "550 Failed to remove directory.\r\n");
+            logMessage << "Error: Failed to remove directory " << complete_path << "." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "550 Failed to remove directory.\r\n");
         }
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unable to remove directory.\r\n");
+        logMessage << "Error: " << e.what() << std::endl;
+        setLogClient(logMessage.str());
+        sendToClient(client, "550 Unable to remove directory.\r\n");
     } catch (const std::exception& e) {
-        std::cerr << "Unexpected error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unexpected error occurred.\r\n");
+        logMessage << "Unexpected error: " << e.what() << std::endl;
+        setLogClient(logMessage.str());
+        sendToClient(client, "550 Unexpected error occurred.\r\n");
     }
 }
 
 void CanalCommand::handleDeleCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: DELE " << std::endl;
-
     if (command.size() != 2) {
-        std::cerr << "Error: Incorrect number of arguments for DELE command." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Incorrect number of arguments for DELE command.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
 
-    std::filesystem::path complete_path = FTP_DIR_USER(client->username) + client->current_directory + command[1];
+    std::filesystem::path complete_path = FTP_DEFAULT_DIR_USER(client->username) + client->current_directory + command[1];
+    std::ostringstream logMessage;
     try {
         if (!std::filesystem::exists(complete_path)) {
-            std::cerr << "Error: File " << complete_path << " does not exist." << std::endl;
-            sendToClient(client->socket_fd, "550 File not found.\r\n");
+            logMessage << "Error: File " << complete_path << " does not exist." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "550 File not found.\r\n");
             return;
         }
         if (!std::filesystem::is_regular_file(complete_path)) {
-            std::cerr << "Error: Path " << complete_path << " is not a file." << std::endl;
-            sendToClient(client->socket_fd, "550 Not a file.\r\n");
+            logMessage << "Error: Path " << complete_path << " is not a file." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "550 Not a file.\r\n");
             return;
         }
         if (std::filesystem::remove(complete_path)) {
-            std::cout << "File " << complete_path << " removed successfully." << std::endl;
-            sendToClient(client->socket_fd, "250 File successfully deleted.\r\n");
+            logMessage << "File " << complete_path << " removed successfully." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "250 File successfully deleted.\r\n");
         } else {
-            std::cerr << "Error: Failed to remove file " << complete_path << "." << std::endl;
-            sendToClient(client->socket_fd, "550 Failed to delete file.\r\n");
+            logMessage << "Error: Failed to remove file " << complete_path << "." << std::endl;
+            setLogClient(logMessage.str());
+            sendToClient(client, "550 Failed to delete file.\r\n");
         }
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unable to delete file.\r\n");
+        logMessage << "Error: " << e.what() << std::endl;
+        setLogClient(logMessage.str());
+        sendToClient(client, "550 Unable to delete file.\r\n");
     } catch (const std::exception& e) {
-        std::cerr << "Unexpected error: " << e.what() << std::endl;
-        sendToClient(client->socket_fd, "550 Unexpected error occurred.\r\n");
+        logMessage << "Unexpected error: " << e.what() << std::endl;
+        setLogClient(logMessage.str());
+        sendToClient(client, "550 Unexpected error occurred.\r\n");
     }
 }
 
 int CanalCommand::createAvailablePort() {
+    std::ostringstream logMessage;
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
-        std::cerr << "Erreur lors de la création du socket" << std::endl;
+        logMessage << "Erreur lors de la création du socket" << std::endl;
+        setLogClient(logMessage.str());
         return -1;
     }
 
@@ -489,7 +680,8 @@ int CanalCommand::createAvailablePort() {
 
     if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         close(server_socket);
-        std::cerr << "Erreur lors du bind" << std::endl;
+        logMessage << "Erreur lors du bind" << std::endl;
+        setLogClient(logMessage.str());
         return -1;
     }
 
@@ -497,7 +689,8 @@ int CanalCommand::createAvailablePort() {
     socklen_t addr_len = sizeof(addr);
     if (getsockname(server_socket, (struct sockaddr*)&addr, &addr_len) < 0) {
         close(server_socket);
-        std::cerr << "Erreur lors de la récupération du nom du socket" << std::endl;
+        logMessage << "Erreur lors de la récupération du nom du socket" << std::endl;
+        setLogClient(logMessage.str());
         return -1;
     }
 
@@ -509,36 +702,44 @@ int CanalCommand::createAvailablePort() {
 }
 
 void CanalCommand::handlePasvCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: PASV " << std::endl;
-
     if (command.size() > 1) {
-        std::cerr << "Error: Syntax error in parameters or arguments." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Syntax error in parameters or arguments.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
 
     int port = createAvailablePort();
     if (port == -1) {
-        std::cerr << "Error: Can't open data connection." << std::endl;
-        sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
+        setLogClient("Error: Can't open data connection. Create Port");
+        sendToClient(client, "425 Can't open data connection.\r\n");
         return;
     }
 
-    client->data_info.mode = FTPMode::Passive;
     client->data_info.port_client = port;
 
     int p1 = port / 256;
     int p2 = port % 256;
-    std::cout << "Server requested with port: " << port << std::endl;
-    sendToClient(client->socket_fd, std::string("227 Entering Passive Mode (" + std::string(IP_SERVER_FORMAT) + "," + std::to_string(p1) + "," + std::to_string(p2) + ").\r\n"));
+
+    CanalData canalData(&client->data_info, client->context);
+    if (!canalData.setupConnection()) {
+        setLogClient("Error: Can't open data connection. Create Socket");
+        sendToClient(client, "425 Can't open data connection.\r\n");
+        return;
+    }
+
+    client->data_info.mode = FTPMode::Passive;
+
+    std::ostringstream logMessage;
+    logMessage << "Server requested with port: " << port << std::endl;
+    setLogClient(logMessage.str());
+    sendToClient(client, std::string("227 Entering Passive Mode (" + std::string(IP_SERVER_FORMAT) + "," + std::to_string(p1) + "," + std::to_string(p2) + ").\r\n"));
+    client->data_info.server_socket = canalData.serverSocket_;
 }
 
 void CanalCommand::handlePortCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: PORT " << std::endl;
-
     if (command.size() != 2) {
-        std::cerr << "Error: Syntax error in parameters or arguments." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Syntax error in parameters or arguments.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
 
@@ -548,8 +749,8 @@ void CanalCommand::handlePortCommand(FTPClient* client, std::vector<std::string>
     int a1, a2, a3, a4, p1, p2;
 
     if (!(iss >> a1 >> a2 >> a3 >> a4 >> p1 >> p2)) {
-        std::cerr << "Error: Syntax error in parameters or arguments." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Syntax error in parameters or arguments.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
 
@@ -557,34 +758,180 @@ void CanalCommand::handlePortCommand(FTPClient* client, std::vector<std::string>
 
     int port = p1 * 256 + p2;
     client->data_info.port_client = port;
+    std::ostringstream logMessage;
+    logMessage << "Client requested PORT command with port: " << port << std::endl;
+    setLogClient(logMessage.str());
+    sendToClient(client, "250 Command okay.\r\n");
+}
 
-    std::cout << "Client requested PORT command with port: " << port << std::endl;
-    sendToClient(client->socket_fd, "250 Command okay.\r\n");
+std::string get_last_write_time(const std::filesystem::path& filePath) {
+    std::filesystem::file_time_type fileTime = std::filesystem::last_write_time(filePath);
+    std::chrono::system_clock::time_point sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        fileTime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
+        );
+    std::time_t cftime = std::chrono::system_clock::to_time_t(sctp);
+    std::tm* tm = std::gmtime(&cftime);
+    std::string timeString = std::asctime(tm);
+    timeString.pop_back();
+
+    return timeString;
+}
+
+void CanalCommand::handleMdtmCommand(FTPClient* client, std::vector<std::string> command) {
+    if (command.size() != 2) {
+        setLogClient("Error: Incorrect number of arguments for MDTM command.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+
+    std::string filename = command[1];
+    std::string filepath = std::string(FTP_DEFAULT_DIR_USER(client->username)) + "/" + filename;
+    std::filesystem::path filePath(filepath);
+
+    try {
+        sendToClient(client, "213 " + get_last_write_time(filepath) + "\r\n");
+    } catch (const std::filesystem::filesystem_error& e) {
+        setLogClient("Error: File not found.");
+        sendToClient(client, "550 File not found.\r\n");
+    }
+}
+
+void CanalCommand::handleSizeCommand(FTPClient *client, std::vector<std::string> command) {
+    if (command.size() != 2) {
+        setLogClient("Error: Incorrect number of arguments for Size command.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+
+    std::string filename = command[1];
+    std::string filepath = std::string(FTP_DEFAULT_DIR_USER(client->username)) + "/" + filename;
+    try {
+        sendToClient(client, "213 " + std::to_string(std::filesystem::file_size(filepath)) + " octets" + "\r\n");
+    } catch (const std::filesystem::filesystem_error& e) {
+        sendToClient(client, "550 File not found.\r\n");
+        setLogClient("Error: File not found.");
+
+    }
+}
+
+void CanalCommand::handleNoopCommand(FTPClient* client, std::vector<std::string> command) {
+    if (command.size() != 1) {
+        sendToClient(client, "NOOP command should have no arguments.\r\n");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+
+    try {
+        sendToClient(client, "200 NOOP\r\n");
+    } catch (const std::exception& e) {
+        setLogClient("Error: Unexpected");
+        sendToClient(client, "550 Unexpected error occurred.\r\n");
+    }
+}
+
+void CanalCommand::handleAlloCommand(FTPClient* client, std::vector<std::string> command) {
+    try {
+        std::cout << "202 Command not implemented, superfluous at this site." << std::endl;
+        sendToClient(client, "202 Command not implemented, superfluous at this site.");
+    } catch (const std::exception& e) {
+        setLogClient("Error: Unexpected");
+        sendToClient(client, "550 Unexpected error occurred.\r\n");
+    }
+}
+
+void CanalCommand::handleSystCommand(FTPClient* client, std::vector<std::string> command) {
+    if (command.size() != 1) {
+        setLogClient("Error: SYST command should have no arguments");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+    try {
+        struct utsname system_info;
+        if (uname(&system_info) != 0) {
+            setLogClient("Error: Unable to retrieve system information.");
+            sendToClient(client, "550 Unable to retrieve system information.\r\n");
+            return;
+        }
+        sendToClient(client, std::string("215 ") + system_info.sysname + " TYPE: L8\r\n");
+    } catch (const std::exception& e) {
+        std::cerr << "Unexpected error: " << e.what() << std::endl;
+        sendToClient(client, "550 Unexpected error occurred.\r\n");
+    }
+}
+
+static std::string get_permissions_string(std::filesystem::perms p) {
+    std::string permission_string;
+
+    permission_string += (p & std::filesystem::perms::owner_read)  != std::filesystem::perms::none ? 'r' : '-';
+    permission_string += (p & std::filesystem::perms::owner_write) != std::filesystem::perms::none ? 'w' : '-';
+    permission_string += (p & std::filesystem::perms::owner_exec)  != std::filesystem::perms::none ? 'x' : '-';
+
+    permission_string += (p & std::filesystem::perms::group_read)  != std::filesystem::perms::none ? 'r' : '-';
+    permission_string += (p & std::filesystem::perms::group_write) != std::filesystem::perms::none ? 'w' : '-';
+    permission_string += (p & std::filesystem::perms::group_exec)  != std::filesystem::perms::none ? 'x' : '-';
+
+    permission_string += (p & std::filesystem::perms::others_read)  != std::filesystem::perms::none ? 'r' : '-';
+    permission_string += (p & std::filesystem::perms::others_write) != std::filesystem::perms::none ? 'w' : '-';
+    permission_string += (p & std::filesystem::perms::others_exec)  != std::filesystem::perms::none ? 'x' : '-';
+
+    return permission_string;
+}
+
+void CanalCommand::handleStatCommand(FTPClient* client, std::vector<std::string> command) {
+    try {
+        if (command.size() == 1) {
+            setLogClient("Error: Command not implemented, superfluous at this site.");
+            sendToClient(client, "202 Command not implemented, superfluous at this site.\r\n");
+        } else {
+            std::string filename = command[1];
+            std::string filepath = std::string(FTP_DEFAULT_DIR_USER(client->username)) + "/" + filename;
+            if (std::filesystem::is_regular_file(filepath)) {
+                sendToClient(client, std::string("213-Status of ") + std::string(filename) + "\n"
+                                                    + std::string("Size: ") + std::to_string(std::filesystem::file_size(filepath)) + " octets\n"
+                                                    + std::string("Permissions: ") + std::string(get_permissions_string(std::filesystem::status(filepath).permissions())) + "\n"
+                                                    + std::string("Last modified: ") + get_last_write_time(filepath) + "\n" + std::string("213 End of file status.\r\n")
+                             );
+            } else {
+                sendToClient(client, "202 Command not implemented, superfluous at this site.\r\n");
+            }
+        }
+
+    } catch (const std::exception& e) {
+        setLogClient("Error: Unexpected.");
+        sendToClient(client, "550 Unexpected error occurred.\r\n");
+    }
+}
+
+void CanalCommand::handleFeatCommand(FTPClient* client, std::vector<std::string> command) {
+    if (command.size() != 1) {
+        setLogClient("Error: FEAT command should have no arguments");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+
+    std::string response = "211-Features:\r\n";
+    for (const auto& handler : commandHandlers_) {
+        response += " " + handler.first + "\r\n";
+    }
+    response += "211 End\r\n";
+    sendToClient(client, response);
 }
 
 //Canal data
 // NLST, STOR, RETR, LIST
 void CanalCommand::handleNlstCommand(FTPClient* client, std::vector<std::string> command) { //todo (passif mode)
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: NLST " << std::endl;
-
     if (client->data_info.mode == FTPMode::Undefined) {
-        std::cerr << "Error: Can't open data connection." << std::endl;
-        sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
+        setLogClient("Error: Can't open data connection. FTPMode Undefined");
+        sendToClient(client, "425 Can't open data connection. FTPMode Undefined\r\n");
         return;
     }
-    sendToClient(client->socket_fd, "150 Here comes the directory listing.\r\n");
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, command, client]() {
-        CanalData canalData(client->data_info);
-        if (!canalData.setupConnection()) {
-            std::cerr << "Error: Can't open data connection." << std::endl;
-            sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
-            return;
-        }
 
-        std::filesystem::path currentPath = FTP_DIR_USER(client->username) + client->current_directory + command[1];
+        std::filesystem::path currentPath = FTP_DEFAULT_DIR_USER(client->username) + client->current_directory + command[1];
         if (!std::filesystem::exists(currentPath) || !std::filesystem::is_directory(currentPath)) {
-            sendToClient(client->socket_fd, "550 Failed to list directory: Directory does not exist.\r\n");
+            sendToClient(client, "550 Failed to list directory: Directory does not exist.\r\n");
+            setLogClient("Failed to list directory: Directory does not exist.");
             return;
         }
 
@@ -593,15 +940,33 @@ void CanalCommand::handleNlstCommand(FTPClient* client, std::vector<std::string>
             fileList << entry.path().filename().string() << "\r\n";
         }
 
-        if (fileList.str().empty()) {
-            sendToClient(client->socket_fd, "226 No files found.\r\n");
-        } else {
-            if (canalData.sendData(fileList.str().c_str(), fileList.str().size())) {
-                sendToClient(client->socket_fd, "226 Directory send OK.\r\n");
-            } else {
-                sendToClient(client->socket_fd, "426 Connection closed; transfer aborted.\r\n");
+        CanalData canalData(&client->data_info, client->context);
+        if (!canalData.setupConnection()) {
+            setLogClient("Error: Can't open data connection.");
+            sendToClient(client, "425 Can't open data connection.\r\n");
+            return;
+        }
+        sendToClient(client, "150 Here comes the directory listing.\r\n");
+        if (client->data_info.mode == FTPMode::Passive) {
+            if (!canalData.acceptConnection()) {
+                setLogClient("Error: Can't open data connection.");
+                sendToClient(client, "425 Can't open data connection.\r\n");
+                return;
             }
         }
+
+        if (fileList.str().empty()) {
+            sendToClient(client, "226 No files found.\r\n");
+            setLogClient("No files found.");
+        } else {
+            if (canalData.sendData(fileList.str().c_str(), fileList.str().size())) {
+                sendToClient(client, "226 Directory send OK.\r\n");
+            } else {
+                sendToClient(client, "426 Connection closed; transfer aborted.\r\n");
+                setLogClient("Connection closed; transfer aborted..");
+            }
+        }
+        canalData.closeConnection();
     });
 }
 
@@ -661,31 +1026,35 @@ static std::string formatFileDate(const struct stat& fileStat) {
 }
 
 void CanalCommand::handleListCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: LIST " << std::endl;
     if (client->data_info.mode == FTPMode::Undefined) {
-        std::cerr << "Error: Can't open data connection." << std::endl;
-        sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
+        std::cout << "Undefined >>>" << std::endl;
+    }
+    if (client->data_info.mode == FTPMode::Active) {
+        std::cout << "Active    >>>" << std::endl;
+    }
+    if (client->data_info.mode == FTPMode::Passive) {
+        std::cout << "Passif    >>>" << std::endl;
+    }
+
+    if (client->data_info.mode == FTPMode::Undefined) {
+        setLogClient("Error: Can't open data connection. FTPMode Undefined");
+        sendToClient(client, "425 Can't open data connection. FTPMode Undefined\r\n");
         return;
     }
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, command, client]() {
-        CanalData canalData(client->data_info);
-        if (!canalData.setupConnection()) {
-            std::cerr << "Error: Can't open data connection." << std::endl;
-            sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
-            return;
-        }
-
-        std::string currentPath = FTP_DIR_USER(client->username) + client->current_directory + (command.size() > 1 ? command[1] : "");
+        std::string currentPath = FTP_DEFAULT_DIR_USER(client->username) + client->current_directory + (command.size() > 2 ? command[1] : "");
         struct stat pathStat;
         if (stat(currentPath.c_str(), &pathStat) != 0 || !S_ISDIR(pathStat.st_mode)) {
-            sendToClient(client->socket_fd, "550 Failed to list directory: Directory does not exist.\r\n");
+            setLogClient("Failed to list directory: Directory does not exist.");
+            sendToClient(client, "550 Failed to list directory: Directory does not exist.\r\n");
             return;
         }
 
         DIR* dir = opendir(currentPath.c_str());
         if (!dir) {
-            sendToClient(client->socket_fd, "550 Failed to open directory.\r\n");
+            setLogClient("Failed to open directory.");
+            sendToClient(client, "550 Failed to open directory.\r\n");
             return;
         }
 
@@ -714,53 +1083,76 @@ void CanalCommand::handleListCommand(FTPClient* client, std::vector<std::string>
         }
         closedir(dir);
 
-        sendToClient(client->socket_fd, "150 Here comes the directory listing.\r\n");
-        std::string fileListStr = fileList.str();
-        if (fileListStr.empty()) {
-            sendToClient(client->socket_fd, "226 No files found.\r\n");
-        } else {
-            if (canalData.sendData(fileListStr.c_str(), fileListStr.size())) {
-                std::cout << fileListStr << std::endl;
-                sendToClient(client->socket_fd, "226 Directory send OK.\r\n");
-            } else {
-                sendToClient(client->socket_fd, "426 Connection closed; transfer aborted.\r\n");
+        CanalData canalData(&client->data_info, client->context);
+        if (!canalData.setupConnection()) {
+            setLogClient("Error: Can't open data connection.");
+            sendToClient(client, "425 Can't open data connection.\r\n");
+            return;
+        }
+        sendToClient(client, "150 Here comes the directory listing.\r\n");
+        if (client->data_info.mode == FTPMode::Passive) {
+            if (!canalData.acceptConnection()) {
+                setLogClient("Error: Can't open data connection.");
+                sendToClient(client, "425 Can't open data connection.\r\n");
+                return;
             }
         }
+
+        std::string fileListStr = fileList.str();
+        if (fileListStr.empty()) {
+            setLogClient("No files found.");
+            sendToClient(client, "226 No files found.\r\n");
+        } else {
+            if (canalData.sendData(fileListStr.c_str(), fileListStr.size())) {
+                sendToClient(client, "226 Directory send OK.\r\n");
+            } else {
+                setLogClient("Connection closed; transfer aborted.");
+                sendToClient(client, "426 Connection closed; transfer aborted.\r\n");
+            }
+        }
+        canalData.closeConnection();
     });
 }
 
 void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string> command) {
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: STOR " << command[1] << std::endl;
-
     if (command.size() != 2) {
-        std::cerr << "Error: Syntax error in parameters or arguments." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Syntax error in parameters or arguments.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
+
     if (client->data_info.mode == FTPMode::Undefined) {
-        std::cerr << "Error: Can't open data connection." << std::endl;
-        sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
+        setLogClient("Error: Can't open data connection. FTPMode Undefined");
+        sendToClient(client, "425 Can't open data connection. FTPMode Undefined\r\n");
         return;
     }
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
-        CanalData canalData(client->data_info);
-        if (!canalData.setupConnection()) {
-            std::cerr << "Error: Can't open data connection." << std::endl;
-            sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
-            return;
-        }
 
-        std::filesystem::path filepath = FTP_DIR_USER(client->username) + client->current_directory + command[1];
+        std::filesystem::path filepath = FTP_DEFAULT_DIR_USER(client->username) + client->current_directory + command[1];
         std::ofstream outFile(filepath, std::ios::out | std::ios::binary);
         if (!outFile) {
-            std::cerr << "Error: Unable to create the file." << std::endl;
-            sendToClient(client->socket_fd, "451 Requested action aborted: local error in processing.\r\n");
+            setLogClient("Error: Unable to create the file.");
+            sendToClient(client, "451 Requested action aborted: local error in processing.\r\n");
             return;
         }
-        sendToClient(client->socket_fd, "150 File status okay; about to open data connection.\r\n");
 
-        const size_t bufferSize = BUFFER_SIZE_DATA;
+        CanalData canalData(&client->data_info, client->context);
+        if (!canalData.setupConnection()) {
+            setLogClient("Error: Can't open data connection.");
+            sendToClient(client, "425 Can't open data connection.\r\n");
+            return;
+        }
+        sendToClient(client, "150 Here comes the directory listing.\r\n");
+        if (client->data_info.mode == FTPMode::Passive) {
+            if (!canalData.acceptConnection()) {
+                setLogClient("Error: Can't open data connection.");
+                sendToClient(client, "425 Can't open data connection.\r\n");
+                return;
+            }
+        }
+
+        const size_t bufferSize = configServer_->getConfigValue<int>(configServer_->ConfigKey::BUFFER_SIZE_DATA_);
         char buffer[bufferSize];
         ssize_t bytesRead;
         while ((bytesRead = canalData.receiveData(buffer, bufferSize)) > 0) {
@@ -768,54 +1160,122 @@ void CanalCommand::handleStorCommand(FTPClient* client, std::vector<std::string>
         }
 
         if (bytesRead < 0) {
-            std::cerr << "Error: Connection closed; transfer aborted." << std::endl;
-            sendToClient(client->socket_fd, "426 Connection closed; transfer aborted.\r\n");
+            setLogClient("Error: Connection closed; transfer aborted.");
+            sendToClient(client, "426 Connection closed; transfer aborted.\r\n");
         } else {
-            sendToClient(client->socket_fd, "226 Closing data connection; requested file action successful.\r\n");
+            sendToClient(client, "226 Closing data connection; requested file action successful.\r\n");
         }
         outFile.close();
+        canalData.closeConnection();
     });
 }
 
 void CanalCommand::handleRetrCommand(FTPClient* client, std::vector<std::string> command) { //todo
-    std::cout << "\nSocket: [" << client->socket_fd << "], Command: RETR " << command[1] << std::endl;
-
     if (command.size() != 2) {
-        std::cerr << "Error: Syntax error in parameters or arguments." << std::endl;
-        sendToClient(client->socket_fd, "501 Syntax error in parameters or arguments.\r\n");
+        setLogClient("Error: Syntax error in parameters or arguments.");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
         return;
     }
+
     if (client->data_info.mode == FTPMode::Undefined) {
-        std::cerr << "Error: Can't open data connection." << std::endl;
-        sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
+        setLogClient("Error: Can't open data connection. FTPMode Undefined");
+        sendToClient(client, "425 Can't open data connection. FTPMode Undefined\r\n");
         return;
     }
 
     queueClient_->enqueueClientTask(client->socket_fd, [this, client, command]() {
-        CanalData canalData(client->data_info);
-        if (!canalData.setupConnection()) {
-            std::cerr << "Error: Can't open data connection." << std::endl;
-            sendToClient(client->socket_fd, "425 Can't open data connection.\r\n");
-            return;
-        }
 
-        std::filesystem::path filepath = FTP_DIR_USER(client->username) + client->current_directory + command[1];
+        std::filesystem::path filepath = FTP_DEFAULT_DIR_USER(client->username) + client->current_directory + command[1];
         FILE* file = fopen(filepath.c_str(), "rb");
         if (file == nullptr) {
-            std::cerr << "Error: File not found: " << filepath << std::endl;
-            sendToClient(client->socket_fd, "550 File not found.\r\n");
+            std::ostringstream logMessage;
+            logMessage << "Error: File not found: " << filepath << std::endl;
+            setLogClient("Error: Connection closed; transfer aborted..");
+            sendToClient(client, "550 File not found.\r\n");
             return;
         }
-        sendToClient(client->socket_fd, "150 File status okay; about to open data connection.\r\n");
 
-        const size_t bufferSize = BUFFER_SIZE_DATA;
-        char buffer[bufferSize];
+        CanalData canalData(&client->data_info, client->context);
+        if (!canalData.setupConnection()) {
+            setLogClient("Error: Can't open data connection.");
+            sendToClient(client, "425 Can't open data connection.\r\n");
+            return;
+        }
+        sendToClient(client, "150 Here comes the directory listing.\r\n");
+        if (client->data_info.mode == FTPMode::Passive) {
+            if (!canalData.acceptConnection()) {
+                setLogClient("Error: Can't open data connection.");
+                sendToClient(client, "425 Can't open data connection.\r\n");
+                return;
+            }
+        }
+
+        const size_t bufferSize = configServer_->getConfigValue<int>(configServer_->ConfigKey::BUFFER_SIZE_DATA_);
+        char buffer[configServer_->getConfigValue<int>(configServer_->ConfigKey::BUFFER_SIZE_DATA_)];
         ssize_t bytesRead;
         while ((bytesRead = fread(buffer, 1, bufferSize, file)) > 0) {
             canalData.sendData(buffer, bytesRead);
         }
         fclose(file);
 
-        sendToClient(client->socket_fd, "226 Closing data connection; requested file action successful.\r\n");
+        sendToClient(client, "226 Closing data connection; requested file action successful.\r\n");
+        canalData.closeConnection();
     });
+}
+
+// FTPS, FTPES
+void CanalCommand::handlePbszCommand(FTPClient* client, std::vector<std::string> command) {
+    if (command.size() != 2) {
+        setLogClient("Error: PBSZ command should have one argument");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+
+    try {
+        int size = std::stoi(command[1]);
+        if (size < 0) {
+            setLogClient("Error: Invalid buffer size.");
+            sendToClient(client, "501 Invalid buffer size.\r\n");
+            return;
+        }
+        sendToClient(client, "200 Command OK.\r\n");
+    } catch (const std::invalid_argument& e) {
+        setLogClient("Error: Invalid buffer size.");
+        sendToClient(client, "501 Invalid buffer size.\r\n");
+    }
+}
+
+void CanalCommand::handleProtCommand(FTPClient* client, std::vector<std::string> command) {
+    if (command.size() != 2) {
+        setLogClient("Error: PBSZ command should have one argumen");
+        sendToClient(client, "501 Syntax error in parameters or arguments.\r\n");
+        return;
+    }
+
+    try {
+        if (command[1] == "C") {
+            client->data_info.protection_level = DataProtectionLevel::None;
+            sendToClient(client, "200 Command OK, switch to non-quantified data.\r\n");
+            client->data_info.ssl_activate = false;
+        } else if(command[1] == "P") {
+            client->data_info.protection_level = DataProtectionLevel::Confidential;
+            sendToClient(client, "200 Command OK, switch to full data encryption.\r\n");
+            client->data_info.ssl_activate = true;
+        } else if (command[1] == "S") {
+            client->data_info.protection_level = DataProtectionLevel::Security;
+            sendToClient(client, "200 Command OK, switch to integrity protection without encryption.\r\n");
+            client->data_info.ssl_activate = true;
+        } else if (command[1] == "E") {
+            client->data_info.protection_level = DataProtectionLevel::Encryption;
+            sendToClient(client, "200 Command OK, switch encryption without authentication.\r\n");
+            client->data_info.ssl_activate = true;
+        } else {
+            setLogClient("Error: Command not implemented for that parameter.");
+            sendToClient(client, "504 Command not implemented for that parameter.\r\n");
+            client->data_info.ssl_activate = false;
+        }
+    } catch (const std::invalid_argument& e) {
+        setLogClient("Error: Unexpected error occurred.");
+        sendToClient(client, "550 Unexpected error occurred.\r\n");
+    }
 }

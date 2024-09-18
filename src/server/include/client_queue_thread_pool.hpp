@@ -1,28 +1,32 @@
 #pragma once
 
-#include "../include/thread_pool.hpp"
-#include <map>
 #include <queue>
-#include <mutex>
+#include <unordered_map>
 #include <functional>
-#include <thread>
+#include <mutex>
 #include <condition_variable>
-#include <iostream> 
+#include <thread>
+#include "thread_pool.hpp"
 
 class ClientQueueThreadPool : public ThreadPool {
 public:
     ClientQueueThreadPool(size_t numThreads);
     ~ClientQueueThreadPool();
-    void enqueueClientTask(int clientSocketFd, std::function<void()> task);
- 
-private:
-    std::map<int, std::queue<std::function<void()>>> clientQueues;
-    std::map<int, std::condition_variable> clientCVs;
-    std::map<int, std::mutex> clientMutexes;
-    std::map<int, std::thread> clientThreads;
-    std::map<int, bool> clientProcessing;
 
-    std::mutex queueMutex;
+    void stop();
+    void enqueueClientTask(int clientSocketFd, std::function<void()> task);
+
+private:
+    struct ClientResources {
+        std::queue<std::function<void()>> taskQueue;
+        std::unique_ptr<std::condition_variable> conditionVar;
+        std::unique_ptr<std::thread> processingThread;
+    };
 
     void processClientQueue(int clientSocketFd);
+    void startClientProcessing(int clientSocketFd);
+
+    std::mutex clientMutex_;
+    std::unordered_map<int, ClientResources> clientResources_;
+    bool stopFlag_;
 };

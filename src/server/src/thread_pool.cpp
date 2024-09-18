@@ -1,43 +1,64 @@
-#include "../include/thread_pool.hpp"
+#include "thread_pool.hpp"
 
-ThreadPool::ThreadPool(size_t numThreads) : stop(false) {
+ThreadPool::ThreadPool(size_t numThreads) : stop_(false) {
     for (size_t i = 0; i < numThreads; ++i) {
-        workers.emplace_back([this] {
+        workers_.emplace_back([this] {
             while (true) {
                 std::function<void()> task;
                 {
-                    std::unique_lock<std::mutex> lock(this->queueMutex);
-                    this->condition.wait(lock, [this] { return this->stop || !this->tasks.empty(); });
-                    if (this->stop && this->tasks.empty()) {
+                    std::unique_lock<std::mutex> lock(queueMutex_);
+                    condition_.wait(lock, [this] {
+                        return stop_ || !tasks_.empty();
+                    });
+
+                    if (stop_ && tasks_.empty()) {
                         return;
                     }
-                    task = std::move(this->tasks.front());
-                    this->tasks.pop();
+
+                    if (!tasks_.empty()) {
+                        task = std::move(tasks_.front());
+                        tasks_.pop();
+                    }
                 }
-                task();
+                if (task) {
+                    task();
+                }
             }
         });
     }
 }
 
 ThreadPool::~ThreadPool() {
+    stop();
     {
-        std::unique_lock<std::mutex> lock(queueMutex);
-        stop = true;
+        std::unique_lock<std::mutex> lock(queueMutex_);
+        stop_ = true;
     }
-    condition.notify_all();
-    for (std::thread &worker : workers) {
-        worker.join();
+    condition_.notify_all();
+    for (auto& worker : workers_) {
+        if (worker.joinable()) {
+            worker.join();
+        }
     }
 }
 
 void ThreadPool::enqueue(std::function<void()> task) {
-    {
-        std::unique_lock<std::mutex> lock(queueMutex);
-        if (stop) {
-            throw std::runtime_error("enqueue on stopped ThreadPool");
-        }
-        tasks.emplace(std::move(task));
+    if (!task) {
+        return;
     }
-    condition.notify_one();
+
+    {
+        std::unique_lock<std::mutex> lock(queueMutex_);
+        if (stop_) {
+            return;
+        }
+        tasks_.emplace(std::move(task));
+    }
+    condition_.notify_one();
+}
+
+void ThreadPool::stop() {
+    std::unique_lock<std::mutex> lock(queueMutex_);
+    stop_ = true;
+    condition_.notify_all();
 }
